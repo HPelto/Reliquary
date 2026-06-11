@@ -60,6 +60,32 @@ body {
   -webkit-app-region: no-drag;
 }
 
+/* ── cursor affordance ─────────────────────────────────────────
+   Chromium renders <button> with the default arrow; give everything
+   pressable the pointer hand, and disabled controls the blocked cursor. */
+button,
+[role='button'],
+[role='switch'],
+[role='tab'],
+[role='menuitem'],
+summary,
+select,
+label:has(> input[type='checkbox']),
+label:has(> input[type='radio']),
+input[type='checkbox'],
+input[type='radio'],
+a[href] {
+  cursor: pointer;
+}
+
+button:disabled,
+button[disabled],
+select:disabled,
+input:disabled,
+[aria-disabled='true'] {
+  cursor: not-allowed;
+}
+
 /* ── glass & glow primitives ───────────────────────────────── */
 .glass {
   background: rgba(18, 21, 30, 0.62);
