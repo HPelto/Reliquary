@@ -6,8 +6,9 @@ release/
 .DS_Store
 keep/*.exe
 keep/*.exe~
-keep/*.db
-keep/*.db-*
+# SQLite databases — generated on first launch, unique per server, never committed
+*.db
+*.db-*
 # TypeScript incremental build info
 *.tsbuildinfo
 # local editor / agent config (settings.local.json etc.)
