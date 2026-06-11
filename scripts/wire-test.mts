@@ -101,6 +101,24 @@ try {
   })
   check('presence visible across clients', true)
 
+  // chosen status states (idle/dnd/invisible) sync to other members
+  const ariaSeenByB = (): { online: boolean; state?: string } | undefined =>
+    connB.world?.members.find((x) => x.fingerprint === aria.identity.fingerprint)
+  connA.setPresence('idle')
+  await until('idle syncs', () => ariaSeenByB()?.state === 'idle')
+  check('idle status visible to other members', true)
+
+  connA.setPresence('invisible')
+  await until('invisible hides', () => {
+    const m = ariaSeenByB()
+    return m?.online === false && m?.state === 'offline'
+  })
+  check('invisible appears offline to others', true)
+
+  connA.setPresence('online')
+  await until('back online', () => ariaSeenByB()?.state === 'online')
+  check('status restores to online', true)
+
   // ── messaging across the wire ─────────────────────────────────────
   const tavern = worldA.channels.find((c) => c.kind === 'text')!
   await connA.sendMessage(tavern.id, 'the wire sings ⚡')

@@ -1,4 +1,5 @@
 import { nameColorFor } from '@/lib/nameStyle'
+import { presenceColor } from '@/lib/presence'
 import { getKeep } from '@/net/bind'
 import type { KeepMember } from '@/net/keep'
 import { KeepAvatar } from './KeepAvatar'
@@ -56,8 +57,10 @@ export function UserCard({
           <span
             className="ml-auto h-2 w-2 rounded-full"
             style={{
-              background: member.online ? 'var(--color-pulse)' : 'var(--color-lo)',
-              boxShadow: member.online ? '0 0 6px var(--color-pulse)' : undefined
+              background: presenceColor(member.state ?? (member.online ? 'online' : 'offline')),
+              boxShadow: member.online
+                ? `0 0 6px ${presenceColor(member.state ?? 'online')}`
+                : undefined
             }}
           />
         </div>

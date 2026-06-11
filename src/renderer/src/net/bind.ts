@@ -52,14 +52,14 @@ export function createKeep(
       updateWorld(instanceId, { name: world.name })
     },
     onMessage: (msg) => useUi.getState().appendKeepMessage(instanceId, msg),
-    onPresence: (userId, online) => {
+    onPresence: (userId, online, state) => {
       const { connections, setKeep } = useUi.getState()
       const world = connections[instanceId]?.world
       if (!world) return
       setKeep(instanceId, {
         world: {
           ...world,
-          members: world.members.map((m) => (m.id === userId ? { ...m, online } : m))
+          members: world.members.map((m) => (m.id === userId ? { ...m, online, state } : m))
         }
       })
     },

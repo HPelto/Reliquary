@@ -16,6 +16,7 @@ import {
 import { CalendarClock, CalendarDays } from 'lucide-react'
 import { hostTag } from '@/lib/relic'
 import { DEFAULT_NAME_COLOR, nameColorFor } from '@/lib/nameStyle'
+import { presenceColor } from '@/lib/presence'
 import { getChannelPrefs, setChannelPrefs, type ChannelPrefs } from '@/lib/notifications'
 import {
   eventLocationText,
@@ -28,6 +29,7 @@ import { useUi, useWorld, type KeepState } from '@/store'
 import type { VoiceParticipant } from '@/net/voice'
 import { KeepAvatar, SelfAvatar } from './KeepAvatar'
 import { ServerMenu } from './ServerMenu'
+import { SelfMenu } from './SelfMenu'
 import { StyledName } from './StyledName'
 
 /** A "starting soon" event banner when one is imminent, otherwise a compact
@@ -361,10 +363,12 @@ export function ChannelPanel(): React.JSX.Element | null {
     voiceChannelId,
     voiceInstanceId,
     openSettings,
-    profile
+    profile,
+    presence
   } = useUi()
   const { instances, servers } = useWorld()
   const [menuOpen, setMenuOpen] = useState(false)
+  const [selfMenuOpen, setSelfMenuOpen] = useState(false)
   const server = servers.find((s) => s.id === activeServerId)
   if (!server) return null
   const instance = instances.find((i) => i.id === server.instanceId)
@@ -490,27 +494,39 @@ export function ChannelPanel(): React.JSX.Element | null {
       <VoiceDock channelName={voiceChannel?.name ?? 'voice'} />
 
       {/* self strip */}
-      <footer className="flex items-center gap-2 border-t border-edge bg-void-0/60 px-2.5 py-2">
-        <SelfAvatar
-          dataUrl={profile.avatar?.dataUrl}
-          name={identity?.name ?? '◆'}
-          accent={identity?.accent ?? '#8b7cf6'}
-          size={28}
-        />
-        <div className="group min-w-0 flex-1 leading-tight">
-          {/* your own name shows your style locally — hover the strip to animate */}
-          <StyledName
-            name={identity?.name ?? '—'}
-            color={profile.nameColor || DEFAULT_NAME_COLOR}
-            font={profile.nameFont}
-            effect={profile.nameEffect}
-            mode="hover"
-            className="truncate text-[12.5px] font-medium"
-          />
-          <div className="truncate text-[10px] text-lo" title={identity?.fingerprint}>
-            {profile.status || `◆ ${identity?.fingerprint ?? ''}`}
+      <footer className="relative flex items-center gap-2 border-t border-edge bg-void-0/60 px-2.5 py-2">
+        {selfMenuOpen && <SelfMenu onClose={() => setSelfMenuOpen(false)} />}
+        <button
+          onClick={() => setSelfMenuOpen((o) => !o)}
+          className="group no-drag -mx-1 flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-void-3/50"
+        >
+          <div className="relative shrink-0">
+            <SelfAvatar
+              dataUrl={profile.avatar?.dataUrl}
+              name={identity?.name ?? '◆'}
+              accent={identity?.accent ?? '#8b7cf6'}
+              size={28}
+            />
+            <span
+              className="absolute -right-0.5 -bottom-0.5 block h-3 w-3 rounded-full border-2 border-void-0"
+              style={{ background: presenceColor(presence.state) }}
+            />
           </div>
-        </div>
+          <div className="min-w-0 flex-1 leading-tight">
+            {/* your own name shows your style locally — hover the strip to animate */}
+            <StyledName
+              name={identity?.name ?? '—'}
+              color={profile.nameColor || DEFAULT_NAME_COLOR}
+              font={profile.nameFont}
+              effect={profile.nameEffect}
+              mode="hover"
+              className="truncate text-[12.5px] font-medium"
+            />
+            <div className="truncate text-[10px] text-lo" title={identity?.fingerprint}>
+              {profile.status || `◆ ${identity?.fingerprint ?? ''}`}
+            </div>
+          </div>
+        </button>
         <button
           onClick={openSettings}
           title="Settings · Ctrl+,"

@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { nameColorFor } from '@/lib/nameStyle'
+import { presenceColor } from '@/lib/presence'
 import type { KeepMember } from '@/net/keep'
 import { useUi, useWorld } from '@/store'
 import { KeepAvatar } from './KeepAvatar'
@@ -41,7 +42,7 @@ function MemberRow({
         />
         <span
           className="absolute -right-0.5 -bottom-0.5 block h-2.5 w-2.5 rounded-full border-2 border-void-1"
-          style={{ background: m.online ? 'var(--color-pulse)' : 'var(--color-lo)' }}
+          style={{ background: presenceColor(m.state ?? (m.online ? 'online' : 'offline')) }}
         />
       </div>
       <div className="min-w-0 leading-tight">

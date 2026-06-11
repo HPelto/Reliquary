@@ -199,15 +199,20 @@ func (s *Server) handleWorld(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "storage error")
 		return
 	}
-	online := s.hub.OnlineUserIDs()
+	presence := s.hub.PresenceSnapshot()
 
 	type member struct {
 		store.User
-		Online bool `json:"online"`
+		Online bool   `json:"online"`
+		State  string `json:"state"`
 	}
 	out := make([]member, 0, len(members))
 	for _, m := range members {
-		out = append(out, member{User: m, Online: online[m.ID]})
+		st := presence[m.ID]
+		if st == "" {
+			st = "offline"
+		}
+		out = append(out, member{User: m, Online: st != "offline", State: st})
 	}
 
 	events, err := s.st.Events()

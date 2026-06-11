@@ -42,7 +42,10 @@ type Hub struct {
 	mu    sync.Mutex
 	conns map[*conn]struct{}
 	// online counts connections per user so multi-device works.
-	online  map[int64]int
+	online map[int64]int
+	// state holds each connected user's chosen presence (online/idle/dnd/
+	// invisible). Ephemeral — the client re-asserts it on connect.
+	state   map[int64]string
 	inbound Inbound
 }
 
@@ -54,7 +57,69 @@ func NewHub(st *store.Store) *Hub {
 		st:     st,
 		conns:  make(map[*conn]struct{}),
 		online: make(map[int64]int),
+		state:  make(map[int64]string),
 	}
+}
+
+func validPresence(s string) bool {
+	switch s {
+	case "online", "idle", "dnd", "invisible":
+		return true
+	}
+	return false
+}
+
+// effectiveStateLocked is the presence other members should see: offline when
+// disconnected OR invisible, otherwise the chosen state (default online).
+// Caller holds h.mu.
+func (h *Hub) effectiveStateLocked(userID int64) string {
+	if h.online[userID] <= 0 {
+		return "offline"
+	}
+	s := h.state[userID]
+	if s == "" {
+		s = "online"
+	}
+	if s == "invisible" {
+		return "offline" // hidden from others
+	}
+	return s
+}
+
+// setPresence records a user's chosen state and broadcasts the change.
+func (h *Hub) setPresence(userID int64, state string) {
+	h.mu.Lock()
+	h.state[userID] = state
+	h.mu.Unlock()
+	h.broadcastPresence(userID)
+}
+
+// broadcastPresence tells every client the user's current wire-visible state.
+func (h *Hub) broadcastPresence(userID int64) {
+	h.mu.Lock()
+	st := h.effectiveStateLocked(userID)
+	h.mu.Unlock()
+	h.Broadcast("PRESENCE_UPDATE", map[string]any{
+		"user_id": userID,
+		"online":  st != "offline",
+		"state":   st,
+	})
+}
+
+// PresenceSnapshot returns the wire-visible state for each connected user
+// (offline/invisible users are absent — callers default them to "offline").
+func (h *Hub) PresenceSnapshot() map[int64]string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make(map[int64]string, len(h.online))
+	for id, n := range h.online {
+		if n > 0 {
+			if st := h.effectiveStateLocked(id); st != "offline" {
+				out[id] = st
+			}
+		}
+	}
+	return out
 }
 
 // Broadcast queues an event to every connected client. Slow clients are
@@ -129,7 +194,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 
 	if firstConn {
-		h.Broadcast("PRESENCE_UPDATE", map[string]any{"user_id": user.ID, "online": true})
+		h.broadcastPresence(user.ID) // defaults to "online" until the client sets a state
 	}
 
 	ctx := r.Context()
@@ -149,6 +214,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	lastConn := h.online[user.ID] == 0
 	if lastConn {
 		delete(h.online, user.ID)
+		delete(h.state, user.ID)
 	}
 	h.mu.Unlock()
 
@@ -156,7 +222,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.inbound != nil {
 			h.inbound.Disconnect(user.ID) // user fully offline — tear down any voice session
 		}
-		h.Broadcast("PRESENCE_UPDATE", map[string]any{"user_id": user.ID, "online": false})
+		h.broadcastPresence(user.ID) // now resolves to offline
 	}
 	ws.Close(websocket.StatusNormalClosure, "bye")
 }
@@ -193,6 +259,13 @@ func (c *conn) readLoop(ctx context.Context) {
 			select {
 			case c.send <- Event{T: "PONG", D: nil}:
 			default:
+			}
+		case ev.T == "PRESENCE_SET":
+			var d struct {
+				State string `json:"state"`
+			}
+			if json.Unmarshal(ev.D, &d) == nil && validPresence(d.State) {
+				c.h.setPresence(c.userID, d.State)
 			}
 		case ev.T != "" && c.h.inbound != nil:
 			c.h.inbound.HandleVoice(c.userID, ev.T, ev.D)
