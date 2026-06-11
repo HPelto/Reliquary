@@ -10,6 +10,22 @@ import {
   type VoiceParticipant,
   type VoiceStatus
 } from '@/net/voice'
+import { pushPresenceEverywhere } from '@/net/session'
+import type { KeepPresence } from '@/net/keep'
+import { getPresencePref, setPresencePref, type PresencePref } from '@/lib/presence'
+
+let presenceTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Read the stored status, resolving an elapsed timer back to Online. */
+function initialPresence(): PresencePref {
+  const p = getPresencePref()
+  if (p.until > 0 && Date.now() > p.until) {
+    const reset: PresencePref = { state: 'online', until: 0 }
+    setPresencePref(reset)
+    return reset
+  }
+  return p
+}
 
 /** Auto-update lifecycle, driven by main-process electron-updater events. */
 export interface UpdateState {
@@ -44,6 +60,10 @@ interface UiState {
   collapsed: Record<string, boolean>
   update: UpdateState
   setUpdate: (u: Partial<UpdateState>) => void
+  /** the local user's chosen status + auto-revert time */
+  presence: PresencePref
+  setPresenceState: (state: KeepPresence, durationMs: number) => void
+  initPresence: () => void
   voiceChannelId: string | null
   /** which Keep the active voice call is on (sockets/PeerConnection live in net/voice) */
   voiceInstanceId: string | null
@@ -122,6 +142,33 @@ export const useUi = create<UiState>((set) => ({
   collapsed: {},
   update: { status: 'idle' },
   setUpdate: (u) => set((s) => ({ update: { ...s.update, ...u } })),
+  presence: initialPresence(),
+  setPresenceState: (state, durationMs) => {
+    const until = durationMs > 0 ? Date.now() + durationMs : 0
+    const pref: PresencePref = { state, until }
+    setPresencePref(pref)
+    if (presenceTimer) {
+      clearTimeout(presenceTimer)
+      presenceTimer = null
+    }
+    if (until > 0) {
+      presenceTimer = setTimeout(
+        () => useUi.getState().setPresenceState('online', 0),
+        Math.max(0, until - Date.now())
+      )
+    }
+    set({ presence: pref })
+    pushPresenceEverywhere(state)
+  },
+  initPresence: () => {
+    const { state, until } = useUi.getState().presence
+    if (presenceTimer) clearTimeout(presenceTimer)
+    presenceTimer =
+      until > 0
+        ? setTimeout(() => useUi.getState().setPresenceState('online', 0), Math.max(0, until - Date.now()))
+        : null
+    pushPresenceEverywhere(state)
+  },
   voiceChannelId: null,
   voiceInstanceId: null,
   voiceStatus: 'idle',

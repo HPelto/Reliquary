@@ -9,7 +9,7 @@ import { loadWorlds, removeWorld, type SavedWorld } from '@/lib/worlds'
 import type { Identity } from '@/lib/identity'
 import { useUi } from '@/store'
 import { allKeeps, createKeep, dropKeep, getKeep } from './bind'
-import { KeepError, profilePayload } from './keep'
+import { KeepError, profilePayload, type KeepPresence } from './keep'
 
 let resumed = false
 
@@ -56,6 +56,8 @@ async function connectWorld(w: SavedWorld): Promise<void> {
       // own member tile doesn't flash a broken image
       await conn.ensureMedia(profile).catch(() => {})
       await conn.fetchWorld()
+      // start this connection with our chosen presence so onopen asserts it
+      conn.presence = useUi.getState().presence.state
       conn.openGateway()
       return
     } catch (e) {
@@ -66,6 +68,11 @@ async function connectWorld(w: SavedWorld): Promise<void> {
       await new Promise((r) => setTimeout(r, Math.min(5_000 * 2 ** attempt, 30_000)))
     }
   }
+}
+
+/** Push the local presence state to every connected Keep (broadcast to members). */
+export function pushPresenceEverywhere(state: KeepPresence): void {
+  for (const conn of allKeeps()) conn.setPresence(state)
 }
 
 export function leaveWorld(serverId: string): void {

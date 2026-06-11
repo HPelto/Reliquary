@@ -33,8 +33,14 @@ export interface KeepUser {
   name_color: string
 }
 
+/** What a user can set for themselves. */
+export type KeepPresence = 'online' | 'idle' | 'dnd' | 'invisible'
+/** What other members see (invisible is never exposed — it reads as offline). */
+export type MemberState = 'online' | 'idle' | 'dnd' | 'offline'
+
 export interface KeepMember extends KeepUser {
   online: boolean
+  state?: MemberState
 }
 
 export interface KeepMessage {
@@ -82,7 +88,7 @@ export interface KeepEvents {
   onStatus?: (status: KeepStatus) => void
   onWorld?: (world: KeepWorld) => void
   onMessage?: (msg: KeepMessage) => void
-  onPresence?: (userId: number, online: boolean) => void
+  onPresence?: (userId: number, online: boolean, state: MemberState) => void
   onMemberJoin?: (user: KeepUser) => void
   onMemberUpdate?: (user: KeepUser) => void
   /** Raw VOICE_* signaling frames, handled by the voice session. */
@@ -153,6 +159,8 @@ export class KeepConnection {
   self: KeepUser | null = null
   world: KeepWorld | null = null
   ping = 0
+  /** the local user's chosen presence; re-asserted to the Keep on each connect */
+  presence: KeepPresence = 'online'
 
   private events: KeepEvents
   private ws: WebSocket | null = null
@@ -405,6 +413,8 @@ export class KeepConnection {
     ws.onopen = () => {
       this.reconnectMs = RECONNECT_BASE_MS
       this.events.onStatus?.('online')
+      // re-assert our chosen presence (server defaults a fresh connection to online)
+      if (this.presence !== 'online') this.sendGateway('PRESENCE_SET', { state: this.presence })
       // catch up on anything missed while disconnected (status stays online)
       void this.fetchWorld().catch(() => {})
     }
@@ -433,12 +443,16 @@ export class KeepConnection {
         this.events.onMessage?.(ev.d as KeepMessage)
         break
       case 'PRESENCE_UPDATE': {
-        const d = ev.d as { user_id: number; online: boolean }
+        const d = ev.d as { user_id: number; online: boolean; state?: MemberState }
+        const state = d.state ?? (d.online ? 'online' : 'offline')
         if (this.world) {
           const m = this.world.members.find((x) => x.id === d.user_id)
-          if (m) m.online = d.online
+          if (m) {
+            m.online = d.online
+            m.state = state
+          }
         }
-        this.events.onPresence?.(d.user_id, d.online)
+        this.events.onPresence?.(d.user_id, d.online, state)
         break
       }
       case 'MEMBER_JOIN': {
@@ -473,6 +487,12 @@ export class KeepConnection {
     if (this.ws?.readyState !== WebSocket.OPEN) return false
     this.ws.send(JSON.stringify({ t, d }))
     return true
+  }
+
+  /** Set the local user's presence on this Keep (broadcast to its members). */
+  setPresence(state: KeepPresence): void {
+    this.presence = state
+    this.sendGateway('PRESENCE_SET', { state })
   }
 
   /** Keep the connection's own world snapshot authoritative for member edits. */

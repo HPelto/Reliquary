@@ -55,9 +55,12 @@ export default function App(): React.JSX.Element {
   // the app's accent theme follows the user's chosen accent, not the server's
   const accent = identity?.accent ?? DEFAULT_ACCENT
 
-  // once the relic key is unlocked, reconnect to every saved keep
+  // once the relic key is unlocked, reconnect to every saved keep + apply status
   useEffect(() => {
-    if (unlockedKey) resumeWorlds()
+    if (unlockedKey) {
+      resumeWorlds()
+      useUi.getState().initPresence()
+    }
   }, [unlockedKey])
 
   // mirror main-process auto-update events into the store (drives the title-bar
