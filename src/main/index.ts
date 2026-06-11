@@ -20,7 +20,9 @@ function sendUpdate(payload: Record<string, unknown>): void {
 function setupAutoUpdate(): void {
   if (!app.isPackaged) return
   autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
+  // install ONLY when the user chooses "Update now" — so "Ignore"/"Remind me
+  // tomorrow" are honored and an update never installs behind their back on quit.
+  autoUpdater.autoInstallOnAppQuit = false
 
   autoUpdater.on('checking-for-update', () => sendUpdate({ status: 'checking-for-update' }))
   autoUpdater.on('update-available', (i) => sendUpdate({ status: 'update-available', version: i.version }))
@@ -32,7 +34,7 @@ function setupAutoUpdate(): void {
   autoUpdater.on('error', (e) => sendUpdate({ status: 'error', message: String(e?.message ?? e) }))
 
   void autoUpdater.checkForUpdates().catch(() => {})
-  setInterval(() => void autoUpdater.checkForUpdates().catch(() => {}), 6 * 60 * 60 * 1000)
+  setInterval(() => void autoUpdater.checkForUpdates().catch(() => {}), 24 * 60 * 60 * 1000)
 }
 
 /**

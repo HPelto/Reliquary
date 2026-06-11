@@ -17,6 +17,7 @@ import { NotificationSettingsModal } from '@/components/NotificationSettingsModa
 import { CreateEventModal } from '@/components/CreateEventModal'
 import { EventsModal } from '@/components/EventsModal'
 import { UserProfileOverlay } from '@/components/UserProfileOverlay'
+import { UpdateBanner } from '@/components/UpdateBanner'
 import { resumeWorlds } from '@/net/session'
 
 function EmptyVault(): React.JSX.Element {
@@ -92,6 +93,7 @@ export default function App(): React.JSX.Element {
       style={{ '--accent': accent } as React.CSSProperties}
     >
       <TitleBar />
+      <UpdateBanner />
       <div className="flex min-h-0 flex-1">
         <ServerRail />
         {activeServer ? (

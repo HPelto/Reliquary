@@ -37,22 +37,14 @@ export function TitleBar(): React.JSX.Element {
         </div>
       )}
 
-      {/* auto-update: a quiet pill once a new version is downloaded */}
-      {update.status === 'update-downloaded' ? (
-        <button
-          onClick={() => void window.reliquary.installUpdate()}
-          title={`Restart to update${update.version ? ` to v${update.version}` : ''}`}
-          className="no-drag ml-auto flex items-center gap-1.5 rounded-full border border-pulse/40 bg-pulse/10 px-2.5 py-[3px] text-[11px] font-medium text-pulse transition-colors hover:bg-pulse/20"
-        >
-          <RefreshCw size={11} />
-          Update ready · Restart
-        </button>
-      ) : update.status === 'download-progress' ? (
+      {/* auto-update: a quiet "downloading" hint; the actionable prompt is the
+          full-width UpdateBanner that appears once the download finishes */}
+      {update.status === 'download-progress' && (
         <span className="ml-auto flex items-center gap-1.5 px-2.5 text-[11px] text-lo">
           <RefreshCw size={11} className="animate-spin" />
           Updating… {update.percent ?? 0}%
         </span>
-      ) : null}
+      )}
 
       {/* search — becomes the ⌘K palette */}
       <div className="pointer-events-none absolute left-1/2 -translate-x-1/2">
