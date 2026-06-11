@@ -1,0 +1,49 @@
+{
+  "name": "reliquary",
+  "version": "0.1.0",
+  "description": "Reliquary — your worlds, your servers, your relic. A gaming-first, self-hostable communication client.",
+  "main": "./out/main/index.js",
+  "author": "Reliquary",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
+    "start": "electron-vite preview",
+    "dist": "electron-vite build && electron-builder --win nsis",
+    "release": "electron-vite build && electron-builder --win nsis --publish always"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/outfit": "^5.2.8",
+    "@fontsource/audiowide": "^5.2.7",
+    "@fontsource/bungee": "^5.2.7",
+    "@fontsource/cinzel": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/monoton": "^5.2.7",
+    "@fontsource/orbitron": "^5.2.8",
+    "@fontsource/pirata-one": "^5.2.8",
+    "@fontsource/press-start-2p": "^5.2.7",
+    "@fontsource/rubik-glitch": "^5.2.7",
+    "@fontsource/vt323": "^5.2.7",
+    "@noble/ed25519": "^2.3.0",
+    "electron-updater": "^6.8.9",
+    "lucide-react": "^1.17.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/node": "^25.9.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^42.4.0",
+    "electron-builder": "^26.15.2",
+    "electron-vite": "^5.0.0",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.5"
+  }
+}

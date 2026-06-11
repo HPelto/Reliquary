@@ -1,0 +1,353 @@
+// Package api is the Keep's REST surface (relic.v1).
+package api
+
+import (
+	_ "embed"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+
+	"reliquary.gg/keep/internal/gateway"
+	"reliquary.gg/keep/internal/store"
+)
+
+//go:embed admin.html
+var adminHTML []byte
+
+// cors lets the Electron client (file:// or localhost dev origin) and the
+// admin GUI talk to any self-hosted Keep. Auth is token/key-based, so a
+// permissive origin policy is fine.
+func cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Admin-Key")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+const ProtocolVersion = "relic.v1"
+const ServerVersion = "0.1.0"
+
+type Config struct {
+	Name string
+}
+
+type Server struct {
+	st         *store.Store
+	hub        *gateway.Hub
+	cfg        Config
+	mux        *chi.Mux
+	challenges *challenges
+	restartFn  func() // set by main only when supervised; nil otherwise
+	updateFn   func() // pull-latest-then-rebuild restart; supervised only
+}
+
+// SetRestart wires the graceful-restart trigger from main. When unset, the
+// host GUI's restart button is hidden.
+func (s *Server) SetRestart(fn func()) { s.restartFn = fn }
+
+// SetUpdateRestart wires the "pull latest source, then rebuild & restart"
+// trigger. When unset, the host GUI's Update & Restart button is hidden.
+func (s *Server) SetUpdateRestart(fn func()) { s.updateFn = fn }
+
+func New(st *store.Store, hub *gateway.Hub, cfg Config) *Server {
+	s := &Server{st: st, hub: hub, cfg: cfg, challenges: newChallenges()}
+
+	r := chi.NewRouter()
+	r.Use(middleware.RealIP, middleware.Recoverer, cors)
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.Timeout(30 * time.Second))
+		r.Get("/.well-known/reliquary", s.handleDiscovery)
+		// embedded admin GUI
+		r.Get("/admin", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write(adminHTML)
+		})
+	})
+
+	r.Route("/v1", func(r chi.Router) {
+		// the gateway is a long-lived hijacked connection — it must NOT sit
+		// behind the request timeout, or it gets severed every 30 seconds
+		r.Get("/gateway", s.hub.ServeHTTP)
+
+		// media bytes are public + immutable (content-addressed) so <img> loads them
+		r.Get("/media/{hash}", s.handleGetMedia)
+
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.Timeout(30 * time.Second))
+
+			r.Post("/auth/challenge", s.handleChallenge)
+			r.Post("/auth/handshake", s.handleHandshake)
+			r.Get("/invites/{token}", s.handleInvitePreview)
+
+			r.Group(func(r chi.Router) {
+				r.Use(s.requireAuth)
+				r.Get("/world", s.handleWorld)
+				r.Get("/channels/{id}/messages", s.handleListMessages)
+				r.Post("/channels/{id}/messages", s.handleCreateMessage)
+				r.Post("/invites", s.handleCreateInvite)
+				r.Patch("/profile", s.handlePatchProfile)
+				r.Get("/media/{hash}/exists", s.handleMediaExists)
+				r.Put("/media/{hash}", s.handleUploadMedia)
+				r.Get("/events", s.handleListEvents)
+				r.Post("/events", s.handleCreateEvent)
+				r.Delete("/events/{id}", s.handleDeleteEvent)
+			})
+
+			// community management — the client's owner/admin UI lives on these
+			r.Route("/admin", func(r chi.Router) {
+				r.Use(s.requireManage)
+				r.Get("/state", s.handleAdminState)
+				r.Patch("/settings", s.handleAdminSettings)
+				r.Post("/channels", s.handleAdminCreateChannel)
+				r.Patch("/channels/{id}", s.handleAdminRenameChannel)
+				r.Delete("/channels/{id}", s.handleAdminDeleteChannel)
+				r.Get("/invites", s.handleAdminListInvites)
+				r.Post("/invites", s.handleAdminCreateInvite)
+				r.Delete("/invites/{token}", s.handleAdminRevokeInvite)
+				r.Get("/net-addresses", s.handleNetAddresses)
+			})
+
+			// server-side config — host key only, never a client token
+			r.Route("/host", func(r chi.Router) {
+				r.Use(s.requireHost)
+				r.Get("/state", s.handleHostState)
+				r.Post("/keep-password", s.handleHostKeepPassword)
+				r.Patch("/users/{id}", s.handleHostSetRole)
+				r.Delete("/users/{id}", s.handleHostDeleteUser)
+				r.Post("/addr", s.handleHostAddr)
+				r.Post("/rescue-invite", s.handleHostRescueInvite)
+				r.Post("/restart", s.handleHostRestart)
+				r.Post("/update-restart", s.handleHostUpdateRestart)
+				r.Get("/check-updates", s.handleHostCheckUpdates)
+			})
+		})
+	})
+
+	s.mux = r
+	return s
+}
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
+
+// ── helpers ─────────────────────────────────────────────────────────
+
+type ctxKey int
+
+const userKey ctxKey = 0
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func (s *Server) requireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if token == "" {
+			writeError(w, http.StatusUnauthorized, "missing bearer token")
+			return
+		}
+		user, err := s.st.UserByToken(token)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid token")
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(withUser(r.Context(), user)))
+	})
+}
+
+// ── discovery ───────────────────────────────────────────────────────
+
+func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"instance": map[string]any{"name": s.instanceName()},
+		"protocol": ProtocolVersion,
+		"version":  ServerVersion,
+		"api":      "/v1",
+		"gateway":  "/v1/gateway",
+	})
+}
+
+// ── world ───────────────────────────────────────────────────────────
+
+func (s *Server) handleWorld(w http.ResponseWriter, r *http.Request) {
+	channels, err := s.st.Channels()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+	members, err := s.st.Members()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+	online := s.hub.OnlineUserIDs()
+
+	type member struct {
+		store.User
+		Online bool `json:"online"`
+	}
+	out := make([]member, 0, len(members))
+	for _, m := range members {
+		out = append(out, member{User: m, Online: online[m.ID]})
+	}
+
+	events, err := s.st.Events()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":            s.instanceName(),
+		"version":         ServerVersion,
+		"protocol":        ProtocolVersion,
+		"channels":        channels,
+		"members":         out,
+		"events":          events,
+		"lock_name_style": s.nameStyleLocked(),
+		"require_invite":  s.inviteRequired(),
+	})
+}
+
+// ── messages ────────────────────────────────────────────────────────
+
+func (s *Server) channelFromPath(w http.ResponseWriter, r *http.Request) (store.Channel, bool) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad channel id")
+		return store.Channel{}, false
+	}
+	ch, err := s.st.ChannelByID(id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "no such channel")
+		return store.Channel{}, false
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return store.Channel{}, false
+	}
+	return ch, true
+}
+
+func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
+	ch, ok := s.channelFromPath(w, r)
+	if !ok {
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
+	msgs, err := s.st.Messages(ch.ID, limit, before)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+	if msgs == nil {
+		msgs = []store.Message{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"messages": msgs})
+}
+
+type createMessageReq struct {
+	Content string `json:"content"`
+}
+
+func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
+	ch, ok := s.channelFromPath(w, r)
+	if !ok {
+		return
+	}
+	if ch.Kind != "text" {
+		writeError(w, http.StatusBadRequest, "cannot post messages to a voice channel")
+		return
+	}
+	var req createMessageReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	req.Content = strings.TrimSpace(req.Content)
+	if req.Content == "" || len(req.Content) > 4000 {
+		writeError(w, http.StatusBadRequest, "content must be 1-4000 characters")
+		return
+	}
+	user := userFrom(r.Context())
+	msg, err := s.st.CreateMessage(ch.ID, user.ID, req.Content)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+	s.hub.Broadcast("MESSAGE_CREATE", msg)
+	writeJSON(w, http.StatusCreated, msg)
+}
+
+// ── invites ─────────────────────────────────────────────────────────
+
+type createInviteReq struct {
+	TTLSeconds int `json:"ttl_seconds"` // 0 = use default (7 days), -1 = never expires
+	MaxUses    int `json:"max_uses"`    // 0 = unlimited
+}
+
+func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+	if user.Role != "owner" && user.Role != "admin" {
+		writeError(w, http.StatusForbidden, "only owners and admins can create invites")
+		return
+	}
+	var req createInviteReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	ttl := 7 * 24 * time.Hour
+	switch {
+	case req.TTLSeconds > 0:
+		ttl = time.Duration(req.TTLSeconds) * time.Second
+	case req.TTLSeconds < 0:
+		ttl = 0 // never expires
+	}
+	inv, err := s.st.CreateInvite(user.ID, ttl, req.MaxUses)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+	writeJSON(w, http.StatusCreated, inv)
+}
+
+// handleInvitePreview lets a client show the join card before registering.
+func (s *Server) handleInvitePreview(w http.ResponseWriter, r *http.Request) {
+	inv, err := s.st.InviteByToken(strings.ToUpper(chi.URLParam(r, "token")))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "no such invite")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+	count, _ := s.st.CountProfiles()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"valid":   inv.Valid(),
+		"name":    s.instanceName(),
+		"members": count,
+		"online":  len(s.hub.OnlineUserIDs()),
+	})
+}

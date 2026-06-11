@@ -1,0 +1,23 @@
+appId: gg.reliquary.client
+productName: Reliquary
+directories:
+  output: release
+files:
+  - out/**
+  - package.json
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+# Auto-update feed. electron-builder generates latest.yml + embeds app-update.yml
+# from this block so installed clients know where to look. Public repo releases
+# download with NO token in the app; a GH_TOKEN is only needed at publish time
+# (npm run release). To self-host instead, swap to: { provider: generic, url: https://… }.
+# ⚠️ Replace `owner` with your GitHub username before the first `npm run release`.
+publish:
+  provider: github
+  owner: HPelto
+  repo: Reliquary

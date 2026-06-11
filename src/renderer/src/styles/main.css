@@ -1,0 +1,523 @@
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/outfit';
+@import '@fontsource/jetbrains-mono';
+/* username display fonts (all OFL) */
+@import '@fontsource/orbitron';
+@import '@fontsource/audiowide';
+@import '@fontsource/bungee';
+@import '@fontsource/monoton';
+@import '@fontsource/press-start-2p';
+@import '@fontsource/vt323';
+@import '@fontsource/pirata-one';
+@import '@fontsource/rubik-glitch';
+@import '@fontsource/cinzel';
+@import 'tailwindcss';
+
+@theme {
+  --color-void-0: #07080c;
+  --color-void-1: #0c0e14;
+  --color-void-2: #12151e;
+  --color-void-3: #1a1e2a;
+  --color-edge: rgba(255, 255, 255, 0.06);
+  --color-relic: #8b7cf6;
+  --color-abyss: #5ea2ff;
+  --color-pulse: #3ddcc4;
+  --color-ember: #ff6b81;
+  --color-gold: #e8c97a;
+  --color-hi: #edeef4;
+  --color-mid: #9ba1b5;
+  --color-lo: #5b6071;
+
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Outfit Variable', 'Inter Variable', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+  user-select: none;
+}
+
+body {
+  background: var(--color-void-0);
+  color: var(--color-hi);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  letter-spacing: 0.005em;
+  -webkit-font-smoothing: antialiased;
+  /* render native controls (date/time pickers, selects) in dark mode */
+  color-scheme: dark;
+}
+
+/* ── window chrome ─────────────────────────────────────────── */
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* ── glass & glow primitives ───────────────────────────────── */
+.glass {
+  background: rgba(18, 21, 30, 0.62);
+  backdrop-filter: blur(24px) saturate(1.3);
+  border: 1px solid var(--color-edge);
+}
+
+.glow-accent {
+  box-shadow: 0 0 18px 0 color-mix(in srgb, var(--accent, #8b7cf6) 35%, transparent);
+}
+
+/* ambient wash bleeding from the active server's accent */
+.ambient::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      520px 380px at 0% 18%,
+      color-mix(in srgb, var(--accent, #8b7cf6) 9%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      700px 500px at 50% -10%,
+      color-mix(in srgb, var(--accent, #8b7cf6) 4%, transparent),
+      transparent 70%
+    );
+}
+
+/* faint film-grain to kill banding on OLED */
+.grain::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ── speaking halo ─────────────────────────────────────────── */
+@keyframes breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-pulse) 80%, transparent),
+      0 0 10px 2px color-mix(in srgb, var(--color-pulse) 35%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-pulse) 95%, transparent),
+      0 0 18px 5px color-mix(in srgb, var(--color-pulse) 55%, transparent);
+  }
+}
+.speaking {
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse-ring {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.reconnecting {
+  animation: pulse-ring 1.4s ease-in-out infinite;
+}
+
+/* ── forge stinger: charge up, then burst the accent across the screen ── */
+@keyframes charge {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 transparent;
+  }
+  35% {
+    transform: scale(1.05);
+    box-shadow: 0 0 24px 2px color-mix(in srgb, var(--charge, #8b7cf6) 45%, transparent);
+  }
+  60% {
+    transform: scale(1.1) translateX(-1px);
+  }
+  72% {
+    transform: scale(1.14) translateX(1.5px);
+  }
+  82% {
+    transform: scale(1.18) translateX(-2px);
+  }
+  90% {
+    transform: scale(1.22) translateX(2px);
+  }
+  100% {
+    transform: scale(1.27) translateX(0);
+    box-shadow: 0 0 80px 16px color-mix(in srgb, var(--charge, #8b7cf6) 90%, transparent);
+  }
+}
+.charging {
+  animation: charge 0.9s cubic-bezier(0.4, 0, 0.6, 1) forwards;
+}
+
+@keyframes stinger-in {
+  from {
+    clip-path: circle(0% at 50% 64%);
+  }
+  to {
+    clip-path: circle(142% at 50% 64%);
+  }
+}
+.stinger-in {
+  animation: stinger-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes stinger-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.stinger-out {
+  animation: stinger-out 0.55s ease-out forwards;
+}
+
+@keyframes pal-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.palette-in {
+  animation: pal-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.msg-in {
+  animation: slide-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── scrollbars ────────────────────────────────────────────── */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.scroll-thin:hover {
+  scrollbar-color: var(--color-void-3) transparent;
+}
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 8px;
+}
+.scroll-thin:hover::-webkit-scrollbar-thumb {
+  background: var(--color-void-3);
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── username styling ───────────────────────────────────────────────
+   Fonts + effects. Effects render statically; animation runs only when the
+   element carries `.on` (always-on surfaces: hover card, profile modal) or
+   when an ancestor `.group` is hovered and the element is `.hoverable`
+   (chat message rows). The member list stays still. */
+
+.uname {
+  display: inline-block;
+  --u: var(--color-hi);
+  line-height: 1.1;
+}
+
+/* fonts (per-font size + tracking tuning so they sit at username scale) */
+.uf-default {
+}
+.uf-orbitron {
+  font-family: 'Orbitron', sans-serif;
+  font-weight: 700;
+  font-size: 0.92em;
+  letter-spacing: 0.02em;
+}
+.uf-audiowide {
+  font-family: 'Audiowide', sans-serif;
+  font-size: 0.92em;
+}
+.uf-bungee {
+  font-family: 'Bungee', sans-serif;
+  font-size: 0.82em;
+  letter-spacing: 0.01em;
+}
+.uf-monoton {
+  font-family: 'Monoton', sans-serif;
+  font-size: 1.02em;
+  letter-spacing: 0.04em;
+}
+.uf-pressstart {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 0.62em;
+  letter-spacing: 0;
+}
+.uf-vt323 {
+  font-family: 'VT323', monospace;
+  font-size: 1.2em;
+  letter-spacing: 0.02em;
+}
+.uf-pirata {
+  font-family: 'Pirata One', system-ui;
+  font-size: 1.18em;
+}
+.uf-glitchfont {
+  font-family: 'Rubik Glitch', system-ui;
+  font-size: 0.96em;
+}
+.uf-cinzel {
+  font-family: 'Cinzel', serif;
+  font-weight: 700;
+  font-size: 0.95em;
+}
+
+/* ── effects: static look first, then the animated rule (two selectors) ── */
+
+/* neon */
+.ufx-neon {
+  color: var(--u);
+  text-shadow: 0 0 5px color-mix(in srgb, var(--u) 60%, transparent);
+}
+.ufx-neon.on,
+.group:hover .ufx-neon.hoverable {
+  animation: u-neon 1.5s ease-in-out infinite;
+}
+@keyframes u-neon {
+  0%,
+  100% {
+    text-shadow: 0 0 4px color-mix(in srgb, var(--u) 55%, transparent),
+      0 0 9px color-mix(in srgb, var(--u) 35%, transparent);
+  }
+  50% {
+    text-shadow: 0 0 8px var(--u), 0 0 18px var(--u),
+      0 0 30px color-mix(in srgb, var(--u) 60%, transparent);
+  }
+}
+
+/* clip-text shared base for gradient-style effects */
+.ufx-gradient,
+.ufx-rainbow,
+.ufx-chrome,
+.ufx-ember,
+.ufx-frost,
+.ufx-toxic {
+  color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+  background-size: 220% 100%;
+  background-position: 0% 0;
+}
+.ufx-gradient.on,
+.group:hover .ufx-gradient.hoverable,
+.ufx-rainbow.on,
+.group:hover .ufx-rainbow.hoverable,
+.ufx-chrome.on,
+.group:hover .ufx-chrome.hoverable,
+.ufx-frost.on,
+.group:hover .ufx-frost.hoverable,
+.ufx-toxic.on,
+.group:hover .ufx-toxic.hoverable {
+  animation: u-slide 3s linear infinite;
+}
+@keyframes u-slide {
+  to {
+    background-position: 220% 0;
+  }
+}
+
+.ufx-gradient {
+  background-image: linear-gradient(
+    90deg,
+    var(--u),
+    var(--color-abyss),
+    var(--u)
+  );
+}
+.ufx-rainbow {
+  background-image: linear-gradient(
+    90deg,
+    #ff6b81,
+    #e8c97a,
+    #3ddcc4,
+    #5ea2ff,
+    #8b7cf6,
+    #ff6b81
+  );
+}
+.ufx-chrome {
+  background-image: linear-gradient(
+    100deg,
+    #8a8f9c 0%,
+    #ffffff 18%,
+    #8a8f9c 38%,
+    #5b6071 55%,
+    #d4d8e0 78%,
+    #8a8f9c 100%
+  );
+}
+.ufx-frost {
+  background-image: linear-gradient(90deg, #7dd3fc, #edeef4, #3ddcc4, #7dd3fc);
+  text-shadow: 0 0 8px rgba(125, 211, 252, 0.3);
+}
+.ufx-toxic {
+  background-image: linear-gradient(90deg, #3ddcc4, #a3e635, #3ddcc4);
+  filter: drop-shadow(0 0 5px rgba(163, 230, 53, 0.45));
+}
+
+/* ember climbs vertically like flame */
+.ufx-ember {
+  background-image: linear-gradient(180deg, #e8c97a, #ff6b81, #ff3d57);
+  background-size: 100% 220%;
+}
+.ufx-ember.on,
+.group:hover .ufx-ember.hoverable {
+  animation: u-ember 1.6s ease-in-out infinite;
+}
+@keyframes u-ember {
+  0%,
+  100% {
+    background-position: 0 0%;
+  }
+  50% {
+    background-position: 0 100%;
+  }
+}
+
+/* flicker — a failing neon sign */
+.ufx-flicker {
+  color: var(--u);
+  text-shadow: 0 0 6px color-mix(in srgb, var(--u) 55%, transparent);
+}
+.ufx-flicker.on,
+.group:hover .ufx-flicker.hoverable {
+  animation: u-flicker 3s linear infinite;
+}
+@keyframes u-flicker {
+  0%,
+  18%,
+  22%,
+  25%,
+  53%,
+  57%,
+  100% {
+    opacity: 1;
+    text-shadow: 0 0 7px var(--u), 0 0 14px color-mix(in srgb, var(--u) 45%, transparent);
+  }
+  20%,
+  24%,
+  55% {
+    opacity: 0.3;
+    text-shadow: none;
+  }
+}
+
+/* glitch — RGB split jitter (pseudo layers only while animating) */
+.ufx-glitch {
+  color: var(--u);
+  position: relative;
+}
+.ufx-glitch.on::before,
+.ufx-glitch.on::after,
+.group:hover .ufx-glitch.hoverable::before,
+.group:hover .ufx-glitch.hoverable::after {
+  content: attr(data-text);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+}
+.ufx-glitch.on::before,
+.group:hover .ufx-glitch.hoverable::before {
+  color: #5ea2ff;
+  animation: u-glitch-a 0.7s steps(2, end) infinite;
+}
+.ufx-glitch.on::after,
+.group:hover .ufx-glitch.hoverable::after {
+  color: #ff6b81;
+  animation: u-glitch-b 0.7s steps(2, end) infinite;
+}
+@keyframes u-glitch-a {
+  0%,
+  100% {
+    transform: translate(0, 0);
+    clip-path: inset(0 0 60% 0);
+  }
+  50% {
+    transform: translate(-1.5px, -1px);
+    clip-path: inset(40% 0 0 0);
+  }
+}
+@keyframes u-glitch-b {
+  0%,
+  100% {
+    transform: translate(0, 0);
+    clip-path: inset(50% 0 0 0);
+  }
+  50% {
+    transform: translate(1.5px, 1px);
+    clip-path: inset(0 0 55% 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .uname,
+  .uname::before,
+  .uname::after {
+    animation: none !important;
+  }
+}
+
+/* ── color picker sliders ────────────────────────────────────────── */
+.color-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 12px;
+  border-radius: 99px;
+  background: var(--track);
+  border: 1px solid var(--color-edge);
+  outline: none;
+  cursor: pointer;
+}
+.color-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-hi);
+  border: 2px solid var(--color-void-0);
+  box-shadow: 0 0 0 1px var(--color-edge), 0 2px 6px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}

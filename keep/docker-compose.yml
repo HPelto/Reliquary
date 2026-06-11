@@ -1,0 +1,12 @@
+services:
+  keep:
+    build: .
+    ports:
+      - "7777:7777"
+    volumes:
+      - keep-data:/data
+    command: ["-addr", ":7777", "-data", "/data/keep.db", "-name", "My Keep"]
+    restart: unless-stopped
+
+volumes:
+  keep-data:
