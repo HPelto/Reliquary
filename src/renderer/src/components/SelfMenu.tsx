@@ -68,6 +68,12 @@ export function SelfMenu({ onClose }: { onClose: () => void }): React.JSX.Elemen
     setPresenceState(state, ms)
     onClose()
   }
+  // close the status submenu only when the cursor moves to another row — NOT on
+  // the gap between the trigger and the submenu (which would make it unreachable)
+  const closeStatus = (): void => {
+    setStatusOpen(false)
+    setFlyout(null)
+  }
 
   return (
     <div
@@ -119,23 +125,17 @@ export function SelfMenu({ onClose }: { onClose: () => void }): React.JSX.Elemen
         )}
       </div>
 
-      <button className={item} onClick={editProfile}>
+      <button className={item} onClick={editProfile} onMouseEnter={closeStatus}>
         <Pencil size={15} className="text-lo" />
         Edit Profile
       </button>
 
       {/* status selector with a duration flyout for non-online states */}
-      <div
-        className="relative"
-        onMouseLeave={() => {
-          setStatusOpen(false)
-          setFlyout(null)
-        }}
-      >
+      <div className="relative">
         <button
           className={`${item} justify-between`}
           onMouseEnter={() => setStatusOpen(true)}
-          onClick={() => setStatusOpen((o) => !o)}
+          onClick={() => setStatusOpen(true)}
         >
           <span className="flex items-center gap-2.5">
             <Dot state={presence.state} />
@@ -184,12 +184,15 @@ export function SelfMenu({ onClose }: { onClose: () => void }): React.JSX.Elemen
         )}
       </div>
 
-      <button className={`${item} cursor-not-allowed opacity-40`} disabled title="Coming soon">
-        <Users size={15} className="text-lo" />
-        Switch Accounts
-      </button>
+      {/* wrapper catches mouse-enter even though the button is disabled */}
+      <div onMouseEnter={closeStatus}>
+        <button className={`${item} cursor-not-allowed opacity-40`} disabled title="Coming soon">
+          <Users size={15} className="text-lo" />
+          Switch Accounts
+        </button>
+      </div>
 
-      <button className={item} onClick={copyId}>
+      <button className={item} onClick={copyId} onMouseEnter={closeStatus}>
         {copied ? <Check size={15} className="text-pulse" /> : <Copy size={15} className="text-lo" />}
         {copied ? 'Copied!' : 'Copy User ID'}
       </button>
