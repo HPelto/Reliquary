@@ -1,0 +1,19 @@
+# Normalize line endings: LF in the repo (and working tree) for all text files,
+# so the same source looks identical on Windows, macOS, and Linux.
+* text=auto eol=lf
+
+# Windows batch scripts must keep CRLF or they can misbehave.
+*.cmd text eol=crlf
+
+# Binary assets — Git must never touch their bytes / line endings.
+*.wav binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.exe binary
+*.db binary
