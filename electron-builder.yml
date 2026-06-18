@@ -10,6 +10,8 @@ win:
     - nsis
 nsis:
   oneClick: false
+  perMachine: true # install to Program Files (admin) — lets the Tauri web installer
+  # run this silently to a chosen dir (/S /D=…) and keeps electron-updater consistent
   allowToChangeInstallationDirectory: true
   deleteAppDataOnUninstall: false
 # Auto-update feed. electron-builder generates latest.yml + embeds app-update.yml
@@ -21,3 +23,6 @@ publish:
   provider: github
   owner: HPelto
   repo: Reliquary
+  # publish straight to a public (non-draft) release so the web installer's
+  # /releases/latest lookup and electron-updater both see it immediately
+  releaseType: release

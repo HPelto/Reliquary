@@ -1,0 +1,9 @@
+{
+  "name": "reliquary-installer-build",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Build tooling for the Reliquary client web installer",
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
     "start": "electron-vite preview",
     "dist": "electron-vite build && electron-builder --win nsis",
-    "release": "electron-vite build && electron-builder --win nsis --publish always"
+    "release": "npm version patch --no-git-tag-version && electron-vite build && electron-builder --win nsis --publish always"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

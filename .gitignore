@@ -13,3 +13,8 @@ keep/*.exe~
 *.tsbuildinfo
 # local editor / agent config (settings.local.json etc.)
 .claude/
+# Tauri installer build artifacts (icons/ + source are kept; target/gen are generated)
+installer/src-tauri/target/
+installer/src-tauri/gen/
+# the built installer exe (distribute via release/hand-off, not the repo)
+installation_File/*.exe
