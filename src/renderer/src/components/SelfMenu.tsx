@@ -78,7 +78,7 @@ export function SelfMenu({ onClose }: { onClose: () => void }): React.JSX.Elemen
   return (
     <div
       ref={ref}
-      className="glass palette-in absolute bottom-full left-2 z-50 mb-2 w-[248px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]"
+      className="glass palette-in absolute bottom-full left-2 z-[120] mb-2 w-[248px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]"
     >
       {/* profile preview header */}
       <div className="mb-1 overflow-hidden rounded-lg">
@@ -145,7 +145,7 @@ export function SelfMenu({ onClose }: { onClose: () => void }): React.JSX.Elemen
         </button>
 
         {statusOpen && (
-          <div className="glass absolute bottom-0 left-full z-50 ml-1 w-[200px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]">
+          <div className="glass absolute bottom-0 left-full z-[120] ml-1 w-[200px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]">
             {STATES.map((st) =>
               st === 'online' ? (
                 <button
@@ -169,7 +169,7 @@ export function SelfMenu({ onClose }: { onClose: () => void }): React.JSX.Elemen
                     <ChevronRight size={14} className="text-lo" />
                   </button>
                   {flyout === st && (
-                    <div className="glass absolute top-0 left-full z-50 ml-1 w-[150px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]">
+                    <div className="glass absolute bottom-0 left-full z-[120] ml-1 w-[150px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]">
                       {PRESENCE_DURATIONS.map((d) => (
                         <button key={d.label} className={item} onClick={() => pick(st, d.ms)}>
                           {d.label}
