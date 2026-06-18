@@ -3,17 +3,18 @@
  * header + Edit Profile (→ profile settings), a status selector
  * (Online/Idle/DND/Invisible) whose non-online options reveal a duration flyout,
  * a dimmed Switch Accounts (deferred), and Copy User ID (→ the fingerprint).
- * Matches the ServerMenu popover pattern (glass, click-outside + Escape).
+ *
+ * Rendered through a PORTAL to <body> with fixed positioning anchored to the
+ * user card. The menu overflows the channel panel into the chat pane; rendering
+ * it inside the panel let the chat pane (its own stacking context) steal clicks
+ * on the overflowing part. At body level it sits above everything.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Check, ChevronRight, Copy, Pencil, Users } from 'lucide-react'
 import { DEFAULT_NAME_COLOR } from '@/lib/nameStyle'
-import {
-  PRESENCE_DURATIONS,
-  presenceColor,
-  presenceLabel
-} from '@/lib/presence'
+import { PRESENCE_DURATIONS, presenceColor, presenceLabel } from '@/lib/presence'
 import type { KeepPresence } from '@/net/keep'
 import { useUi } from '@/store'
 import { SelfAvatar } from './KeepAvatar'
@@ -30,16 +31,32 @@ function Dot({ state, size = 10 }: { state: KeepPresence | 'offline'; size?: num
   )
 }
 
-export function SelfMenu({ onClose }: { onClose: () => void }): React.JSX.Element {
+export function SelfMenu({
+  onClose,
+  anchorRef
+}: {
+  onClose: () => void
+  anchorRef: React.RefObject<HTMLElement | null>
+}): React.JSX.Element {
   const { identity, profile, presence, setPresenceState, openSettings } = useUi()
   const ref = useRef<HTMLDivElement>(null)
   const [statusOpen, setStatusOpen] = useState(false)
   const [flyout, setFlyout] = useState<KeepPresence | null>(null)
   const [copied, setCopied] = useState(false)
+  const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null)
+
+  // anchor the menu just above the user card
+  useLayoutEffect(() => {
+    const el = anchorRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    setPos({ left: r.left, bottom: window.innerHeight - r.top + 6 })
+  }, [anchorRef])
 
   useEffect(() => {
     const onDown = (e: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+      const t = e.target as Node
+      if (ref.current && !ref.current.contains(t) && !anchorRef.current?.contains(t)) onClose()
     }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') onClose()
@@ -50,7 +67,7 @@ export function SelfMenu({ onClose }: { onClose: () => void }): React.JSX.Elemen
       window.removeEventListener('mousedown', onDown)
       window.removeEventListener('keydown', onKey)
     }
-  }, [onClose])
+  }, [onClose, anchorRef])
 
   const item =
     'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-mid transition-colors hover:bg-void-3 hover:text-hi'
@@ -68,17 +85,16 @@ export function SelfMenu({ onClose }: { onClose: () => void }): React.JSX.Elemen
     setPresenceState(state, ms)
     onClose()
   }
-  // close the status submenu only when the cursor moves to another row — NOT on
-  // the gap between the trigger and the submenu (which would make it unreachable)
   const closeStatus = (): void => {
     setStatusOpen(false)
     setFlyout(null)
   }
 
-  return (
+  return createPortal(
     <div
       ref={ref}
-      className="glass palette-in absolute bottom-full left-2 z-[120] mb-2 w-[248px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]"
+      style={{ position: 'fixed', left: pos?.left ?? -9999, bottom: pos?.bottom ?? 0 }}
+      className="glass palette-in z-[200] w-[248px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]"
     >
       {/* profile preview header */}
       <div className="mb-1 overflow-hidden rounded-lg">
@@ -145,7 +161,7 @@ export function SelfMenu({ onClose }: { onClose: () => void }): React.JSX.Elemen
         </button>
 
         {statusOpen && (
-          <div className="glass absolute bottom-0 left-full z-[120] ml-1 w-[208px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]">
+          <div className="glass absolute bottom-0 left-full z-[200] ml-1 w-[208px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]">
             {STATES.map((st) => (
               <button
                 key={st}
@@ -166,7 +182,7 @@ export function SelfMenu({ onClose }: { onClose: () => void }): React.JSX.Elemen
             {/* one duration panel beside the whole submenu for the hovered status —
                 reachable by moving straight right from any row (no crossing rows) */}
             {flyout && (
-              <div className="glass absolute bottom-0 left-full z-[120] ml-1 w-[168px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]">
+              <div className="glass absolute bottom-0 left-full z-[200] ml-1 w-[168px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]">
                 {PRESENCE_DURATIONS.map((d) => (
                   <button key={d.label} className={item} onClick={() => pick(flyout, d.ms)}>
                     {d.label}
@@ -190,6 +206,7 @@ export function SelfMenu({ onClose }: { onClose: () => void }): React.JSX.Elemen
         {copied ? <Check size={15} className="text-pulse" /> : <Copy size={15} className="text-lo" />}
         {copied ? 'Copied!' : 'Copy User ID'}
       </button>
-    </div>
+    </div>,
+    document.body
   )
 }

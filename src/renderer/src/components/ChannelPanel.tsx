@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Bell,
   BellOff,
@@ -369,6 +369,7 @@ export function ChannelPanel(): React.JSX.Element | null {
   const { instances, servers } = useWorld()
   const [menuOpen, setMenuOpen] = useState(false)
   const [selfMenuOpen, setSelfMenuOpen] = useState(false)
+  const selfBtnRef = useRef<HTMLButtonElement>(null)
   const server = servers.find((s) => s.id === activeServerId)
   if (!server) return null
   const instance = instances.find((i) => i.id === server.instanceId)
@@ -495,8 +496,11 @@ export function ChannelPanel(): React.JSX.Element | null {
 
       {/* self strip */}
       <footer className="relative flex items-center gap-2 border-t border-edge bg-void-0/60 px-2.5 py-2">
-        {selfMenuOpen && <SelfMenu onClose={() => setSelfMenuOpen(false)} />}
+        {selfMenuOpen && (
+          <SelfMenu onClose={() => setSelfMenuOpen(false)} anchorRef={selfBtnRef} />
+        )}
         <button
+          ref={selfBtnRef}
           onClick={() => setSelfMenuOpen((o) => !o)}
           className="group no-drag -mx-1 flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-void-3/50"
         >
