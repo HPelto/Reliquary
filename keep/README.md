@@ -13,6 +13,44 @@ go build -o keep ./cmd/keep && ./keep -addr :7777 -data keep.db -name "My Keep"
 docker compose up
 ```
 
+## Networking & port forwarding
+
+Only the **Keep** needs to be reachable — the client connects *outbound* and
+needs nothing forwarded. To let friends join over the internet, forward these
+ports on your router to the machine running the Keep:
+
+| Port     | Protocol | Carries                                                                          | Flag (default)    |
+| -------- | -------- | -------------------------------------------------------------------------------- | ----------------- |
+| **7777** | **TCP**  | Everything: discovery, handshake, chat, presence, media, the gateway WebSocket, and `/admin` | `-addr :7777`     |
+| **7011** | **UDP**  | Voice (the SFU — Opus audio)                                                     | `-voice-port 7011` |
+
+- **Text/chat only** → forward **TCP 7777**.
+- **Voice too** → also forward **UDP 7011**.
+
+### Voice across the internet (behind a home router / NAT)
+
+Forwarding UDP 7011 isn't enough by itself: by default the voice server only
+advertises its **LAN** address (e.g. `192.168.x.x`), which remote friends can't
+reach. Tell it your **public IP** so it advertises a reachable address:
+
+```sh
+./keep -voice-ip <your-public-ip>     # or: set VOICE_PUBLIC_IP=<your-public-ip>
+```
+
+(Find your public IP at e.g. whatismyip.com. On the same LAN, voice works
+without this.)
+
+### Custom ports
+
+Both are configurable — if you change them, forward the values you set:
+
+```sh
+./keep -addr :8443 -voice-port 9000
+```
+
+> The `/admin` host console is on the same TCP port (`http://localhost:7777/admin`),
+> gated by the host key. Use it **locally**; don't expose it publicly without TLS.
+
 ## Identity model
 
 Accounts are **client-owned**. There is no registration, no email, no
