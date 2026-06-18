@@ -145,40 +145,34 @@ export function SelfMenu({ onClose }: { onClose: () => void }): React.JSX.Elemen
         </button>
 
         {statusOpen && (
-          <div className="glass absolute bottom-0 left-full z-[120] ml-1 w-[200px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]">
-            {STATES.map((st) =>
-              st === 'online' ? (
-                <button
-                  key={st}
-                  className={`${item} justify-between`}
-                  onMouseEnter={() => setFlyout(null)}
-                  onClick={() => pick('online', 0)}
-                >
-                  <span className="flex items-center gap-2.5">
-                    <Dot state="online" />
-                    Online
-                  </span>
-                </button>
-              ) : (
-                <div key={st} className="relative" onMouseEnter={() => setFlyout(st)}>
-                  <button className={`${item} justify-between`} onClick={() => setFlyout(st)}>
-                    <span className="flex items-center gap-2.5">
-                      <Dot state={st} />
-                      {presenceLabel(st)}
-                    </span>
-                    <ChevronRight size={14} className="text-lo" />
+          <div className="glass absolute bottom-0 left-full z-[120] ml-1 w-[208px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]">
+            {STATES.map((st) => (
+              <button
+                key={st}
+                className={`${item} justify-between`}
+                onMouseEnter={() => setFlyout(st === 'online' ? null : st)}
+                onClick={() => {
+                  if (st === 'online') pick('online', 0)
+                }}
+              >
+                <span className="flex items-center gap-2.5">
+                  <Dot state={st} />
+                  {presenceLabel(st)}
+                </span>
+                {st !== 'online' && <ChevronRight size={14} className="text-lo" />}
+              </button>
+            ))}
+
+            {/* one duration panel beside the whole submenu for the hovered status —
+                reachable by moving straight right from any row (no crossing rows) */}
+            {flyout && (
+              <div className="glass absolute bottom-0 left-full z-[120] ml-1 w-[168px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]">
+                {PRESENCE_DURATIONS.map((d) => (
+                  <button key={d.label} className={item} onClick={() => pick(flyout, d.ms)}>
+                    {d.label}
                   </button>
-                  {flyout === st && (
-                    <div className="glass absolute bottom-0 left-full z-[120] ml-1 w-[150px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]">
-                      {PRESENCE_DURATIONS.map((d) => (
-                        <button key={d.label} className={item} onClick={() => pick(st, d.ms)}>
-                          {d.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )
+                ))}
+              </div>
             )}
           </div>
         )}
