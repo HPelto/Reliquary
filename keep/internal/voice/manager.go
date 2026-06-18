@@ -68,10 +68,9 @@ type participant struct {
 // NewManager builds the SFU. It binds one UDP socket that all peer connections
 // multiplex over, so the operator only has to forward a single extra port.
 func NewManager(cfg Config, sig Signaler) (*Manager, error) {
-	if cfg.UDPPort == 0 {
-		cfg.UDPPort = 7011
-	}
-
+	// Port 0 lets the OS assign a free port (used by tests so they don't clash
+	// with a running Keep). The real server always passes 7011 via the -voice-port
+	// flag, so the default lives there, not here.
 	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: cfg.UDPPort})
 	if err != nil {
 		return nil, fmt.Errorf("voice: bind udp :%d: %w", cfg.UDPPort, err)
@@ -81,7 +80,11 @@ func NewManager(cfg Config, sig Signaler) (*Manager, error) {
 	se.SetICEUDPMux(webrtc.NewICEUDPMux(logging.NewDefaultLoggerFactory().NewLogger("sfu"), udp))
 	se.SetIncludeLoopbackCandidate(true) // so a localhost client can reach a localhost Keep in dev
 	if cfg.PublicIP != "" {
-		se.SetNAT1To1IPs([]string{cfg.PublicIP}, webrtc.ICECandidateTypeHost)
+		// Srflx (not Host): ADD a reflexive candidate for the public IP while KEEPING
+		// the LAN/host candidates — so internet peers use the public address and LAN
+		// peers keep using the local one. Host mode would replace the LAN address and
+		// break voice for anyone on the same network (no router hairpinning needed).
+		se.SetNAT1To1IPs([]string{cfg.PublicIP}, webrtc.ICECandidateTypeSrflx)
 	}
 
 	me := &webrtc.MediaEngine{}
