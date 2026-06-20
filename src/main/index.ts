@@ -1,9 +1,15 @@
-import { app, shell, BrowserWindow, ipcMain, nativeTheme } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, nativeTheme, session } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { join } from 'path'
 
 const VOID_0 = '#07080C'
+
+// Expose raw local-IP ICE candidates instead of obfuscated mDNS (.local) ones,
+// so the Keep's pion SFU can pair host/LAN/loopback candidates and voice
+// connects (esp. when the client and Keep run on the same machine or LAN).
+// Must be set before the app is ready.
+app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns')
 
 /**
  * Auto-update. The app checks a release feed (configured via electron-builder's
@@ -131,6 +137,11 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   nativeTheme.themeSource = 'dark'
+
+  // Grant microphone (and other) access for our own trusted renderer — without
+  // this Electron denies getUserMedia, so voice fails before it even signals.
+  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(true))
+  session.defaultSession.setPermissionCheckHandler(() => true)
 
   const storage = new FileStorage()
   // sync get: the renderer needs identity state before first paint

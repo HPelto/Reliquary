@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"sync"
 
@@ -177,6 +178,7 @@ func (m *Manager) join(userID, channelID int64, offer webrtc.SessionDescription)
 	}
 	r.parts[userID] = p
 	m.where[userID] = channelID
+	log.Printf("voice: user %d joining channel %d", userID, channelID)
 
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
@@ -185,6 +187,7 @@ func (m *Manager) join(userID, channelID int64, offer webrtc.SessionDescription)
 		m.sig.SendToUser(userID, "VOICE_ICE", map[string]any{"candidate": c.ToJSON()})
 	})
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
+		log.Printf("voice: user %d connection state: %s", userID, s)
 		if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateClosed {
 			m.remove(userID)
 		}

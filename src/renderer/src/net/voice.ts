@@ -14,7 +14,7 @@
 
 import { getKeep } from './bind'
 import { useUi } from '@/store'
-import { getVoicePrefs, type VoicePrefs } from '@/lib/voicePrefs'
+import { getVoicePrefs, setVoicePrefs, type VoicePrefs } from '@/lib/voicePrefs'
 import { playVoiceJoin, playVoiceLeave } from '@/lib/sound'
 
 export type VoiceStatus = 'idle' | 'connecting' | 'connected' | 'failed'
@@ -76,7 +76,12 @@ class VoiceSession {
     this.channelId = channelId
     this.selfId = getKeep(instanceId)?.self?.id ?? 0
     this.prefs = getVoicePrefs()
-    this.pc = new RTCPeerConnection({ iceServers: [] }) // SFU is the public endpoint; no STUN/TURN
+    // STUN lets a NATed client discover its public address for hole-punching to
+    // the SFU. Host/LAN/loopback candidates (the main process disables mDNS so
+    // they're raw IPs the SFU can pair) cover same-machine + LAN.
+    this.pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    })
   }
 
   async start(): Promise<void> {
@@ -92,9 +97,19 @@ class VoiceSession {
 
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({ audio })
-    } catch (err) {
-      ui.setVoiceStatus('failed')
-      throw err
+    } catch {
+      // the chosen mic may be gone (different audio setup) — fall back to the
+      // default and forget the dead device so we don't keep failing on it.
+      try {
+        this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        if (this.prefs.micDeviceId) {
+          this.prefs = { ...this.prefs, micDeviceId: '' }
+          setVoicePrefs(this.prefs)
+        }
+      } catch (err) {
+        ui.setVoiceStatus('failed')
+        throw err
+      }
     }
     if (this.closed) return this.teardownMedia()
 
