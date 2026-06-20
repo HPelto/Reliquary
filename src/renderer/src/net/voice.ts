@@ -48,10 +48,12 @@ class VoiceSession {
   private pc: RTCPeerConnection
   private localStream: MediaStream | null = null
   private micTrack: MediaStreamTrack | null = null
+  private micSender: RTCRtpSender | null = null // the audio sender; trackless if no mic
 
   private remotes = new Map<number, Remote>() // userId → playback + analysis
   private audioCtx: AudioContext | null = null
   private localAnalyser: AnalyserNode | null = null
+  private localSource: MediaStreamAudioSourceNode | null = null
   private selfId: number
 
   private iceQueue: RTCIceCandidateInit[] = []
@@ -88,38 +90,22 @@ class VoiceSession {
     const ui = useUi.getState()
     ui.setVoiceStatus('connecting')
 
-    const audio: MediaTrackConstraints = {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true
-    }
-    if (this.prefs.micDeviceId) audio.deviceId = { exact: this.prefs.micDeviceId }
-
-    try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({ audio })
-    } catch {
-      // the chosen mic may be gone (different audio setup) — fall back to the
-      // default and forget the dead device so we don't keep failing on it.
-      try {
-        this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true })
-        if (this.prefs.micDeviceId) {
-          this.prefs = { ...this.prefs, micDeviceId: '' }
-          setVoicePrefs(this.prefs)
-        }
-      } catch (err) {
-        ui.setVoiceStatus('failed')
-        throw err
-      }
-    }
+    // best-effort mic — null if none is available. We join either way.
+    this.localStream = await this.acquireMic(this.prefs.micDeviceId)
     if (this.closed) return this.teardownMedia()
 
-    this.micTrack = this.localStream.getAudioTracks()[0] ?? null
-    if (this.micTrack) {
-      this.pc.addTrack(this.micTrack, this.localStream)
-      this.applyMicEnabled()
+    this.micTrack = this.localStream?.getAudioTracks()[0] ?? null
+    if (this.micTrack && this.localStream) {
+      this.micSender = this.pc.addTrack(this.micTrack, this.localStream)
+    } else {
+      // no working mic — still join so we can HEAR everyone. The trackless
+      // sendrecv sender lets a mic be added live later (replaceTrack, no reneg).
+      this.micSender = this.pc.addTransceiver('audio', { direction: 'sendrecv' }).sender
+      this.muted = true
     }
+    this.applyMicEnabled()
 
-    // mic is live — we're committed to entering. Cue the join sound.
+    // committed to entering — cue the join sound.
     playVoiceJoin()
 
     this.pc.onicecandidate = (e) => {
@@ -208,16 +194,27 @@ class VoiceSession {
 
   // ── speaking detection (local, from received audio + own mic) ──────────────
 
+  private bindLocalAnalyser(): void {
+    if (!this.audioCtx || !this.localStream) {
+      this.localAnalyser = null
+      return
+    }
+    try {
+      this.localSource?.disconnect()
+      this.localSource = this.audioCtx.createMediaStreamSource(this.localStream)
+      this.localAnalyser = this.audioCtx.createAnalyser()
+      this.localAnalyser.fftSize = 512
+      this.localSource.connect(this.localAnalyser)
+    } catch {
+      this.localAnalyser = null // best-effort
+    }
+  }
+
   private startAnalysis(): void {
     try {
       this.audioCtx = new AudioContext()
       void this.audioCtx.resume().catch(() => {})
-      if (this.localStream) {
-        const src = this.audioCtx.createMediaStreamSource(this.localStream)
-        this.localAnalyser = this.audioCtx.createAnalyser()
-        this.localAnalyser.fftSize = 512
-        src.connect(this.localAnalyser)
-      }
+      this.bindLocalAnalyser()
     } catch {
       return // no analysis available; calls still work, just no speaking glow
     }
@@ -275,6 +272,50 @@ class VoiceSession {
     if (!this.micTrack) return
     const live = this.prefs.mode === 'ptt' ? this.pttHeld && !this.muted : !this.muted
     this.micTrack.enabled = live && !this.deafened
+  }
+
+  /** Get a mic stream for deviceId, falling back to the system default (and
+   *  forgetting a dead deviceId). Returns null when no microphone exists at all. */
+  private async acquireMic(deviceId: string): Promise<MediaStream | null> {
+    const get = async (id: string): Promise<MediaStream | null> => {
+      const audio: MediaTrackConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+      if (id) audio.deviceId = { exact: id }
+      try {
+        return await navigator.mediaDevices.getUserMedia({ audio })
+      } catch {
+        return null
+      }
+    }
+    const exact = await get(deviceId)
+    if (exact) return exact
+    if (!deviceId) return null // already tried the default — no mic present
+    // the chosen device is gone — forget it and use the system default
+    this.prefs = { ...this.prefs, micDeviceId: '' }
+    setVoicePrefs(this.prefs)
+    return get('')
+  }
+
+  /** Switch the microphone live, without leaving the call (replaceTrack). */
+  async setMic(deviceId: string): Promise<void> {
+    if (this.closed || !this.micSender) return
+    this.prefs = { ...this.prefs, micDeviceId: deviceId }
+    setVoicePrefs(this.prefs)
+    const stream = await this.acquireMic(deviceId)
+    if (this.closed || !stream) return
+    const track = stream.getAudioTracks()[0]
+    if (!track) return
+    await this.micSender.replaceTrack(track).catch(() => {})
+    this.micTrack?.stop()
+    this.localStream?.getTracks().forEach((t) => t.stop())
+    this.localStream = stream
+    this.micTrack = track
+    this.muted = false
+    this.bindLocalAnalyser()
+    this.applyMicEnabled()
   }
 
   setState(muted: boolean, deafened: boolean): void {
@@ -396,6 +437,11 @@ export function voiceSetState(muted: boolean, deafened: boolean): void {
 
 export function voiceSetSpeaker(deviceId: string): void {
   current?.setSpeaker(deviceId)
+}
+
+/** Switch the active call's microphone live (also persisted for next join). */
+export function voiceSetMic(deviceId: string): void {
+  void current?.setMic(deviceId)
 }
 
 /** Route a VOICE_* gateway frame: state updates patch the store (so channel

@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Keyboard, Mic, Volume2 } from 'lucide-react'
 import { getVoicePrefs, setVoicePrefs, type VoicePrefs } from '@/lib/voicePrefs'
-import { voiceSetSpeaker } from '@/net/voice'
+import { voiceSetMic, voiceSetSpeaker } from '@/net/voice'
 
 const LEVEL_SCALE = 0.3 // RMS value that fills the meter; speech peaks well under this
 
@@ -124,7 +124,10 @@ export function VoiceSettings(): React.JSX.Element {
         <select
           className={selectCls}
           value={prefs.micDeviceId}
-          onChange={(e) => update({ micDeviceId: e.target.value })}
+          onChange={(e) => {
+            update({ micDeviceId: e.target.value })
+            voiceSetMic(e.target.value) // switch live if a call is in progress
+          }}
         >
           <option value="">System default</option>
           {mics.map((d, i) => (
