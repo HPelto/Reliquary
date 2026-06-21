@@ -17,6 +17,31 @@ struct ReleaseInfo {
     version: String,
     url: String,
     size: u64,
+    /// Base64 SHA-512 of the installer, taken from the release's `latest.yml`.
+    /// The download is refused if its hash doesn't match this. This is the same
+    /// checksum the in-app electron-updater verifies, so first-install and
+    /// auto-update share one source of truth.
+    sha512: String,
+}
+
+/// Pull the top-level `path:` and `sha512:` out of electron-builder's
+/// `latest.yml`. Those two keys are at column 0; the per-file copies under
+/// `files:` are indented, so `strip_prefix` (which requires an exact start)
+/// matches only the authoritative top-level values.
+fn parse_latest_yml(yml: &str) -> Option<(String, String)> {
+    let mut path = None;
+    let mut sha = None;
+    for line in yml.lines() {
+        if let Some(rest) = line.strip_prefix("path:") {
+            path = Some(rest.trim().trim_matches(['\'', '"']).to_string());
+        } else if let Some(rest) = line.strip_prefix("sha512:") {
+            sha = Some(rest.trim().to_string());
+        }
+    }
+    match (path, sha) {
+        (Some(p), Some(s)) if !p.is_empty() && !s.is_empty() => Some((p, s)),
+        _ => None,
+    }
 }
 
 /// Default install location: Program Files (x86)\ReliquaryApp.
@@ -47,21 +72,61 @@ fn fetch_latest() -> Result<ReleaseInfo, String> {
     let assets = body["assets"]
         .as_array()
         .ok_or("No published release found yet.")?;
+
+    // latest.yml is the publisher's manifest: it names the exact installer file
+    // and carries its SHA-512. We require it — without it we can't verify the
+    // download, and running an unverified elevated installer is unacceptable.
+    let yml_asset = assets
+        .iter()
+        .find(|a| a["name"].as_str().map(|n| n.eq_ignore_ascii_case("latest.yml")).unwrap_or(false))
+        .ok_or("This release is missing latest.yml, so the download can't be verified — aborting for safety.")?;
+    let yml = ureq::get(yml_asset["browser_download_url"].as_str().unwrap_or(""))
+        .set("User-Agent", "Reliquary-Installer")
+        .call()
+        .map_err(|e| format!("Couldn't fetch release metadata: {e}"))?
+        .into_string()
+        .map_err(|e| e.to_string())?;
+    let (path, sha512) = parse_latest_yml(&yml)
+        .ok_or("Couldn't read the checksum from release metadata — aborting for safety.")?;
+
+    // Select the exact installer named by latest.yml, not merely the first .exe.
     let asset = assets
         .iter()
-        .find(|a| {
-            a["name"]
-                .as_str()
-                .map(|n| n.to_ascii_lowercase().ends_with(".exe"))
-                .unwrap_or(false)
-        })
-        .ok_or("The latest release has no Windows installer (.exe) yet.")?;
+        .find(|a| a["name"].as_str().map(|n| n.eq_ignore_ascii_case(&path)).unwrap_or(false))
+        .ok_or("The release is missing the installer named by its metadata — aborting for safety.")?;
 
     Ok(ReleaseInfo {
         version,
         url: asset["browser_download_url"].as_str().unwrap_or("").to_string(),
         size: asset["size"].as_u64().unwrap_or(0),
+        sha512,
     })
+}
+
+/// Stream-hash a file with SHA-512 and compare to the expected base64 digest
+/// from `latest.yml`. Returns a user-facing error on any mismatch so the caller
+/// can refuse to run the file.
+fn verify_sha512(path: &std::path::Path, expected_b64: &str) -> Result<(), String> {
+    use base64::Engine as _;
+    use sha2::{Digest, Sha512};
+
+    let mut file = std::fs::File::open(path).map_err(|e| format!("Couldn't reopen download: {e}"))?;
+    let mut hasher = Sha512::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|e| format!("Couldn't read download: {e}"))?;
+    let got = hasher.finalize();
+
+    let want = base64::engine::general_purpose::STANDARD
+        .decode(expected_b64.trim())
+        .map_err(|_| "Release checksum was malformed — aborting for safety.".to_string())?;
+
+    if got.as_slice() == want.as_slice() {
+        Ok(())
+    } else {
+        Err("Security check failed: the downloaded installer did not match the \
+             publisher's checksum and was NOT run. Your connection may be \
+             compromised — try again on a network you trust."
+            .into())
+    }
 }
 
 /// Native folder picker (non-blocking).
@@ -76,11 +141,15 @@ async fn pick_dir(app: AppHandle) -> Option<String> {
 
 /// Download the installer (emitting progress) then run it silently+elevated.
 #[tauri::command]
-fn install(app: AppHandle, url: String, dir: String) {
+fn install(app: AppHandle, url: String, dir: String, sha512: String) {
     std::thread::spawn(move || {
         let fail = |msg: String| {
             let _ = app.emit("failed", msg);
         };
+        // Without a checksum we cannot verify the download — never run unverified.
+        if sha512.trim().is_empty() {
+            return fail("No checksum available for this release — aborting for safety.".into());
+        }
         let _ = app.emit("status", json!({"message": "Downloading the latest Reliquary…"}));
 
         let resp = match ureq::get(&url).set("User-Agent", "Reliquary-Installer").call() {
@@ -92,7 +161,12 @@ fn install(app: AppHandle, url: String, dir: String) {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
 
-        let tmp = std::env::temp_dir().join("ReliquarySetup.exe");
+        // Download into a fresh per-run temp dir rather than a fixed, predictable
+        // path in the shared %TEMP%, so another local process can't pre-plant or
+        // swap the file between write and exec.
+        let tmpdir = std::env::temp_dir().join(format!("reliquary-install-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmpdir);
+        let tmp = tmpdir.join("ReliquarySetup.exe");
         let mut file = match std::fs::File::create(&tmp) {
             Ok(f) => f,
             Err(e) => return fail(format!("Couldn't write temp file: {e}")),
@@ -120,6 +194,14 @@ fn install(app: AppHandle, url: String, dir: String) {
             return fail(format!("Disk flush error: {e}"));
         }
         drop(file);
+
+        // Verify the bytes match the publisher's checksum BEFORE running anything
+        // elevated. On mismatch, delete the file and bail — never execute it.
+        let _ = app.emit("status", json!({"message": "Verifying download…"}));
+        if let Err(e) = verify_sha512(&tmp, &sha512) {
+            let _ = std::fs::remove_file(&tmp);
+            return fail(e);
+        }
 
         let _ = app.emit("status", json!({"message": "Installing Reliquary…"}));
         match run_installer(&tmp, &dir) {

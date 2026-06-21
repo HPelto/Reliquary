@@ -51,6 +51,38 @@ Both are configurable — if you change them, forward the values you set:
 > The `/admin` host console is on the same TCP port (`http://localhost:7777/admin`),
 > gated by the host key. Use it **locally**; don't expose it publicly without TLS.
 
+## Privacy & your network address
+
+Reliquary is **decentralized and self-hosted** — there's no company server sitting
+between you and a Keep. When you join one, your client connects *directly* to the
+machine running that Keep, exactly like connecting to any website or game server.
+
+**What this means for your public IP:**
+
+- **The Keep's owner can see the IP address you connect from.** This is inherent to
+  connecting directly to someone's server — it's true of every server you've ever
+  joined. Reliquary itself does **not** collect, log, store, or display anyone's IP
+  anywhere in the app or admin console, but the operator of any server can observe
+  the addresses connecting to their own machine at the network level. We can't
+  cryptographically hide that, and we won't pretend to.
+- **Other members of a Keep cannot see your IP.** Voice runs through the Keep as a
+  selective forwarder (SFU), so audio never flows peer-to-peer — the people in your
+  voice channel never learn your address. Only the Keep's operator can.
+
+**How to protect yourself** (standard, common-sense decentralization hygiene):
+
+- **Only join Keeps run by people you trust.** A public IP can be abused (e.g. for
+  DDoS), so treat joining a stranger's Keep like handing them your address — because
+  you are.
+- **Use a VPN** if you want to mask your real IP from Keep operators. Routing your
+  connection through a VPN means a Keep only ever sees the VPN's address, not yours.
+  This is the most effective way to stay anonymous on a self-hosted network.
+
+This is the trade that comes with owning your own infrastructure instead of renting
+a big platform's: no middleman harvesting your data, but also no middleman shielding
+your address. On open, decentralized software, protecting yourself is ultimately in
+your own hands — and a VPN puts it there.
+
 ## Identity model
 
 Accounts are **client-owned**. There is no registration, no email, no

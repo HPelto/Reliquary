@@ -197,7 +197,7 @@
         installedDir = $('dir').value
         show('progress')
         $('status').textContent = 'Contacting GitHub…'
-        invoke('install', { url: release.url, dir: installedDir })
+        invoke('install', { url: release.url, dir: installedDir, sha512: release.sha512 })
       }
 
       $('retry').onclick = () => {
