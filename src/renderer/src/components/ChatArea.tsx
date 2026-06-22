@@ -68,7 +68,7 @@ function MessageRow({
   onContextMenu: (e: React.MouseEvent, msg: KeepMessage) => void
   onEditSubmit: (msg: KeepMessage, content: string) => void
   onEditCancel: () => void
-  onOpenLightbox: (items: Attachment[], index: number) => void
+  onOpenLightbox: (items: Attachment[], index: number, startAt?: number, autoPlay?: boolean) => void
   onJump: (id: number) => void
 }): React.JSX.Element {
   const a = msg.author
@@ -199,7 +199,12 @@ export function ChatArea(): React.JSX.Element | null {
   const [draft, setDraft] = useState('')
   const [menu, setMenu] = useState<MenuTarget | null>(null)
   const [editingId, setEditingId] = useState<number | null>(null)
-  const [lightbox, setLightbox] = useState<{ items: Attachment[]; index: number } | null>(null)
+  const [lightbox, setLightbox] = useState<{
+    items: Attachment[]
+    index: number
+    startAt?: number
+    autoPlay?: boolean
+  } | null>(null)
   const [pending, setPending] = useState<PendingAttachment[]>([])
   const [uploadOpen, setUploadOpen] = useState(false)
   const [sending, setSending] = useState(false)
@@ -447,7 +452,9 @@ export function ChatArea(): React.JSX.Element | null {
                     }}
                     onEditSubmit={submitEdit}
                     onEditCancel={() => setEditingId(null)}
-                    onOpenLightbox={(items, index) => setLightbox({ items, index })}
+                    onOpenLightbox={(items, index, startAt, autoPlay) =>
+                      setLightbox({ items, index, startAt, autoPlay })
+                    }
                     onJump={(jid) => void jumpTo(jid)}
                     grouped={
                       i > 0 &&
@@ -635,7 +642,12 @@ export function ChatArea(): React.JSX.Element | null {
           items={lightbox.items}
           index={lightbox.index}
           instanceId={server.instanceId}
-          onIndex={(i) => setLightbox((lb) => (lb ? { ...lb, index: i } : lb))}
+          startAt={lightbox.startAt}
+          autoPlay={lightbox.autoPlay}
+          // navigating to another item starts it fresh (from 0, auto-playing)
+          onIndex={(i) =>
+            setLightbox((lb) => (lb ? { ...lb, index: i, startAt: 0, autoPlay: true } : lb))
+          }
           onClose={() => setLightbox(null)}
         />
       )}

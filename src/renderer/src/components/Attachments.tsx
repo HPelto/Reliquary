@@ -49,7 +49,7 @@ export function MessageAttachments({
 }: {
   items: Attachment[]
   instanceId: string
-  onOpenLightbox: (visuals: Attachment[], index: number) => void
+  onOpenLightbox: (visuals: Attachment[], index: number, startAt?: number, autoPlay?: boolean) => void
 }): React.JSX.Element | null {
   if (!items || items.length === 0) return null
   const visuals = items.filter(isVisual)
@@ -73,7 +73,7 @@ function VisualMedia({
 }: {
   items: Attachment[]
   instanceId: string
-  onOpen: (visuals: Attachment[], index: number) => void
+  onOpen: (visuals: Attachment[], index: number, startAt?: number, autoPlay?: boolean) => void
 }): React.JSX.Element {
   const conn = getKeep(instanceId)
   const url = (a: Attachment): string => conn?.mediaUrl(a.hash) ?? ''
@@ -89,7 +89,7 @@ function VisualMedia({
           src={url(a)}
           name={a.name}
           downloadUrl={dl(a)}
-          onExpand={() => onOpen(items, 0)}
+          onExpand={(time, playing) => onOpen(items, 0, time, playing)}
           boxStyle={{ width: box.width, height: box.height }}
         />
       )
@@ -113,7 +113,7 @@ function VisualMedia({
       {items.map((a, i) => (
         <div
           key={a.hash + i}
-          onClick={() => onOpen(items, i)}
+          onClick={() => onOpen(items, i, 0, attachmentKind(a) === 'video')}
           className="group/cell relative aspect-square w-full cursor-pointer overflow-hidden rounded-lg border border-edge bg-void-0"
         >
           {attachmentKind(a) === 'video' ? (
@@ -204,12 +204,16 @@ export function Lightbox({
   items,
   index,
   instanceId,
+  startAt,
+  autoPlay,
   onIndex,
   onClose
 }: {
   items: Attachment[]
   index: number
   instanceId: string
+  startAt?: number
+  autoPlay?: boolean
   onIndex: (i: number) => void
   onClose: () => void
 }): React.JSX.Element {
@@ -280,7 +284,8 @@ export function Lightbox({
             src={url(cur)}
             name={cur.name}
             downloadUrl={dl(cur)}
-            autoPlay
+            startAt={startAt}
+            autoPlay={autoPlay}
             large
           />
         ) : (

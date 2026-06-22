@@ -21,14 +21,18 @@ export function VideoPlayer({
   downloadUrl,
   onExpand,
   autoPlay,
+  startAt,
   large,
   boxStyle
 }: {
   src: string
   name: string
   downloadUrl: string
-  onExpand?: () => void
+  /** Open the large preview. Receives the current time + whether it was playing
+   *  so the preview can continue seamlessly instead of starting a second copy. */
+  onExpand?: (time: number, playing: boolean) => void
   autoPlay?: boolean
+  startAt?: number
   large?: boolean
   boxStyle?: React.CSSProperties
 }): React.JSX.Element {
@@ -61,8 +65,14 @@ export function VideoPlayer({
     }
   }
   const onSurface = (): void => {
-    if (onExpand) onExpand()
-    else togglePlay()
+    const v = vRef.current
+    if (onExpand) {
+      // hand off our position + state, then stop here so only one copy plays
+      onExpand(v?.currentTime ?? 0, v ? !v.paused : false)
+      v?.pause()
+    } else {
+      togglePlay()
+    }
   }
   const seekTo = (clientX: number): void => {
     const bar = barRef.current
@@ -131,7 +141,6 @@ export function VideoPlayer({
       <video
         ref={vRef}
         src={src}
-        autoPlay={autoPlay}
         playsInline
         onClick={onSurface}
         onPlay={() => {
@@ -140,7 +149,16 @@ export function VideoPlayer({
         }}
         onPause={() => setPlaying(false)}
         onTimeUpdate={(e) => setCur(e.currentTarget.currentTime)}
-        onLoadedMetadata={(e) => setDur(e.currentTarget.duration)}
+        onLoadedMetadata={(e) => {
+          const v = e.currentTarget
+          setDur(v.duration)
+          // seek to the handed-off position first, then resume — no flash of 0
+          if (startAt && startAt > 0) {
+            v.currentTime = startAt
+            setCur(startAt)
+          }
+          if (autoPlay) void v.play().catch(() => {})
+        }}
         onVolumeChange={(e) => {
           setMuted(e.currentTarget.muted)
           setVol(e.currentTarget.volume)
