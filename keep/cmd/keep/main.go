@@ -150,7 +150,11 @@ func main() {
 			_ = httpSrv.Shutdown(ctx)
 		}
 		srv.SetRestart(func() { shutdown(restartExitCode) })
-		srv.SetUpdateRestart(func() { shutdown(updateExitCode) })
+		// "Update & Restart" (git pull + rebuild) only makes sense from source.
+		// The portable binary has no source/Git, so hide it there.
+		if os.Getenv("KEEP_PORTABLE") != "1" {
+			srv.SetUpdateRestart(func() { shutdown(updateExitCode) })
+		}
 	}
 
 	if useTLS {

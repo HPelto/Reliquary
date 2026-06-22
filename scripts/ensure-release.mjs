@@ -57,32 +57,40 @@ if (release) {
   }
 }
 
-// Attach the web installer so the "latest download" link always works.
-const exe = new URL('../installation_File/ReliquarySetup.exe', import.meta.url)
-const ASSET = 'ReliquarySetup.exe'
-if (release && existsSync(exe)) {
-  // Replace any existing same-named asset (so re-runs / new builds overwrite).
-  const prior = (release.assets ?? []).find((a) => a.name === ASSET)
+// Attach extra assets so their "latest download" links always work. Non-fatal:
+// a failed upload doesn't block the client release.
+async function uploadAsset(fileUrl, assetName) {
+  if (!release || !existsSync(fileUrl)) {
+    console.log(`ensure-release: ${assetName} not found locally — skipping`)
+    return
+  }
+  const prior = (release.assets ?? []).find((a) => a.name === assetName)
   if (prior) {
     await fetch(`https://api.github.com/repos/${REPO}/releases/assets/${prior.id}`, {
       method: 'DELETE',
       headers
     })
   }
-  const bytes = readFileSync(exe)
+  const bytes = readFileSync(fileUrl)
   const uploadBase = release.upload_url.replace(/\{.*\}$/, '')
-  const up = await fetch(`${uploadBase}?name=${ASSET}`, {
+  const up = await fetch(`${uploadBase}?name=${assetName}`, {
     method: 'POST',
-    headers: { ...headers, 'Content-Type': 'application/octet-stream', 'Content-Length': String(bytes.length) },
+    headers: {
+      ...headers,
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': String(bytes.length)
+    },
     body: bytes
   })
   if (up.ok) {
-    console.log(`ensure-release: uploaded ${ASSET} (${(bytes.length / 1e6).toFixed(1)} MB)`)
+    console.log(`ensure-release: uploaded ${assetName} (${(bytes.length / 1e6).toFixed(1)} MB)`)
   } else {
     const body = await up.json().catch(() => ({}))
-    console.error(`ensure-release: installer upload failed (${up.status})`, body.message ?? '')
-    // Non-fatal: the client release still publishes; the installer link just won't refresh.
+    console.error(`ensure-release: ${assetName} upload failed (${up.status})`, body.message ?? '')
   }
-} else if (release) {
-  console.log(`ensure-release: ${ASSET} not found locally — skipping installer asset upload`)
 }
+
+// the version-agnostic web installer (stable /releases/latest/download link)
+await uploadAsset(new URL('../installation_File/ReliquarySetup.exe', import.meta.url), 'ReliquarySetup.exe')
+// the portable Keep server package
+await uploadAsset(new URL('../dist/Keep-Portable-Windows.zip', import.meta.url), 'Keep-Portable-Windows.zip')
