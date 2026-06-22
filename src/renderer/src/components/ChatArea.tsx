@@ -9,6 +9,7 @@ import {
   LayoutGrid,
   Loader2,
   Pin,
+  Play,
   Plus,
   Reply as ReplyIcon,
   SendHorizontal,
@@ -505,8 +506,15 @@ export function ChatArea(): React.JSX.Element | null {
                   key={p.hash + i}
                   className="group/att relative h-20 w-20 overflow-hidden rounded-lg border border-edge bg-void-3"
                 >
-                  {p.previewUrl ? (
+                  {p.contentType.startsWith('image/') ? (
                     <img src={p.previewUrl} alt={p.name} className="h-full w-full object-cover" />
+                  ) : p.contentType.startsWith('video/') ? (
+                    <>
+                      <video src={p.previewUrl} muted className="h-full w-full object-cover" />
+                      <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-void-0/20">
+                        <Play size={16} className="text-hi" fill="currentColor" />
+                      </div>
+                    </>
                   ) : (
                     <div className="flex h-full w-full flex-col items-center justify-center gap-1 px-1 text-center">
                       <FileIcon size={18} className="text-lo" />

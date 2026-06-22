@@ -83,6 +83,16 @@ function imageSize(url: string): Promise<{ width: number; height: number }> {
   })
 }
 
+function videoSize(url: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve) => {
+    const v = document.createElement('video')
+    v.preload = 'metadata'
+    v.onloadedmetadata = () => resolve({ width: v.videoWidth, height: v.videoHeight })
+    v.onerror = () => resolve({ width: 0, height: 0 })
+    v.src = url
+  })
+}
+
 /** Hash + stage any picked File (any type, any size). The per-Keep upload limit
  *  is enforced by the caller (against the Keep's max_upload_mb) and the server. */
 export async function fileToPendingAttachment(file: File): Promise<PendingAttachment> {
@@ -97,6 +107,11 @@ export async function fileToPendingAttachment(file: File): Promise<PendingAttach
   if (contentType.startsWith('image/')) {
     previewUrl = URL.createObjectURL(file)
     const dims = await imageSize(previewUrl)
+    width = dims.width
+    height = dims.height
+  } else if (contentType.startsWith('video/')) {
+    previewUrl = URL.createObjectURL(file)
+    const dims = await videoSize(previewUrl)
     width = dims.width
     height = dims.height
   }
