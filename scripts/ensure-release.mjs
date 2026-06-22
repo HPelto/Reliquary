@@ -132,5 +132,7 @@ async function uploadAsset(fileUrl, assetName) {
 
 // the version-agnostic web installer (stable /releases/latest/download link)
 await uploadAsset(new URL('../installation_File/ReliquarySetup.exe', import.meta.url), 'ReliquarySetup.exe')
-// the portable Keep server package
+// the portable Keep server package + its self-update manifest (version + sha256).
+// keep-latest.json must be present for running Keeps to discover this release.
 await uploadAsset(new URL('../dist/Keep-Portable-Windows.zip', import.meta.url), 'Keep-Portable-Windows.zip')
+await uploadAsset(new URL('../dist/keep-latest.json', import.meta.url), 'keep-latest.json')

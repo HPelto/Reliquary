@@ -18,6 +18,7 @@ import (
 	"reliquary.gg/keep/internal/api"
 	"reliquary.gg/keep/internal/gateway"
 	"reliquary.gg/keep/internal/store"
+	"reliquary.gg/keep/internal/update"
 	"reliquary.gg/keep/internal/voice"
 )
 
@@ -179,9 +180,36 @@ func main() {
 			_ = httpSrv.Shutdown(ctx)
 		}
 		srv.SetRestart(func() { shutdown(restartExitCode) })
-		// "Update & Restart" (git pull + rebuild) only makes sense from source.
-		// The portable binary has no source/Git, so hide it there.
-		if os.Getenv("KEEP_PORTABLE") != "1" {
+		if os.Getenv("KEEP_PORTABLE") == "1" {
+			// Portable has no source/Git to rebuild from. Instead it self-updates
+			// from GitHub Releases like the client: download the latest signed-by-
+			// pipeline zip, verify its SHA-256, swap keep.exe in place, and restart
+			// into it via the supervisor's restart code.
+			update.CleanupOld()
+			srv.SetSelfUpdate(func() {
+				log.Printf("self-update: downloading latest release…")
+				if err := update.Apply(update.Repo); err != nil {
+					log.Printf("self-update failed: %v", err)
+					srv.SetUpdateError(err.Error())
+					return
+				}
+				log.Printf("self-update: installed — restarting into the new binary")
+				shutdown(restartExitCode)
+			})
+			// Auto-check on boot and once a day, mirroring the client's cadence, so
+			// the host console can passively show "update available".
+			go func() {
+				for {
+					st := update.Check(update.Repo, api.ServerVersion)
+					srv.SetUpdateStatus(st.Latest, st.Behind, st.Err)
+					if st.Behind {
+						log.Printf("update available: v%s (running v%s) — apply from the host console", st.Latest, api.ServerVersion)
+					}
+					time.Sleep(24 * time.Hour)
+				}
+			}()
+		} else {
+			// Source mode: "Update & Restart" does git pull + rebuild (exit 43).
 			srv.SetUpdateRestart(func() { shutdown(updateExitCode) })
 		}
 	}

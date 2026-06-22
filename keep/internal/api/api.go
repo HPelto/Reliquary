@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -37,7 +38,14 @@ func cors(next http.Handler) http.Handler {
 }
 
 const ProtocolVersion = "relic.v1"
-const ServerVersion = "0.1.0"
+
+// ServerVersion is stamped at build time via -ldflags "-X …api.ServerVersion=x.y.z"
+// (see scripts/build-keep-portable.mjs) so the portable binary can compare itself
+// against the GitHub release manifest and self-update. It MUST stay a var — the
+// linker's -X can only override vars, not consts. "dev" marks an un-stamped build
+// (e.g. `go run`), which reads as older than any real release and so never
+// spuriously offers an update.
+var ServerVersion = "dev"
 
 type Config struct {
 	Name string
@@ -50,7 +58,15 @@ type Server struct {
 	mux        *chi.Mux
 	challenges *challenges
 	restartFn  func() // set by main only when supervised; nil otherwise
-	updateFn   func() // pull-latest-then-rebuild restart; supervised only
+	updateFn   func() // pull-latest-then-rebuild restart; source mode only
+	selfUpdate func() // portable: download+swap latest release, then restart
+
+	// cached self-update status, refreshed by main's background checker
+	updMu      sync.Mutex
+	updLatest  string
+	updBehind  bool
+	updErr     string
+	updChecked bool
 }
 
 // SetRestart wires the graceful-restart trigger from main. When unset, the
@@ -58,8 +74,45 @@ type Server struct {
 func (s *Server) SetRestart(fn func()) { s.restartFn = fn }
 
 // SetUpdateRestart wires the "pull latest source, then rebuild & restart"
-// trigger. When unset, the host GUI's Update & Restart button is hidden.
+// trigger (source mode). When unset, that path is unavailable.
 func (s *Server) SetUpdateRestart(fn func()) { s.updateFn = fn }
+
+// SetSelfUpdate wires the portable GitHub self-update path: fn downloads the
+// latest release binary, swaps it in, and restarts. When set, the host console
+// shows Update & Restart / Check for updates backed by GitHub instead of git.
+func (s *Server) SetSelfUpdate(fn func()) { s.selfUpdate = fn }
+
+// SetUpdateStatus caches the latest known version so the host console can
+// passively surface "update available" between manual checks. Called by main's
+// background checker.
+func (s *Server) SetUpdateStatus(latest string, behind bool, errStr string) {
+	s.updMu.Lock()
+	defer s.updMu.Unlock()
+	s.updLatest, s.updBehind, s.updErr, s.updChecked = latest, behind, errStr, true
+}
+
+// SetUpdateError records a failed update attempt without disturbing the cached
+// version, so the console can show why an Update & Restart didn't take.
+func (s *Server) SetUpdateError(msg string) {
+	s.updMu.Lock()
+	defer s.updMu.Unlock()
+	s.updErr = msg
+}
+
+func (s *Server) updateStatus() (latest string, behind, checked bool, errStr string) {
+	s.updMu.Lock()
+	defer s.updMu.Unlock()
+	return s.updLatest, s.updBehind, s.updChecked, s.updErr
+}
+
+// applyUpdate is the trigger behind the host console's Update & Restart button:
+// the portable self-update path wins when present, else the source git path.
+func (s *Server) applyUpdate() func() {
+	if s.selfUpdate != nil {
+		return s.selfUpdate
+	}
+	return s.updateFn
+}
 
 func New(st *store.Store, hub *gateway.Hub, cfg Config) *Server {
 	s := &Server{st: st, hub: hub, cfg: cfg, challenges: newChallenges()}

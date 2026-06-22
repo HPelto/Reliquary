@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"reliquary.gg/keep/internal/store"
+	"reliquary.gg/keep/internal/update"
 )
 
 func (s *Server) handleHostState(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +52,7 @@ func (s *Server) handleHostState(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	latest, behind, checked, updErr := s.updateStatus()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":              s.instanceName(),
 		"version":           ServerVersion,
@@ -63,7 +65,12 @@ func (s *Server) handleHostState(w http.ResponseWriter, r *http.Request) {
 		"invite_count":      len(invites),
 		"online_count":      len(online),
 		"restart_available": s.restartFn != nil,
-		"update_available":  s.updateFn != nil,
+		"update_available":  s.applyUpdate() != nil,
+		"self_update":       s.selfUpdate != nil,
+		"latest_version":    latest,
+		"update_behind":     behind,
+		"update_checked":    checked,
+		"update_error":      updErr,
 		"tls_enabled":       tlsEnabled == "1",
 		"tls_cert_path":     tlsCert,
 		"tls_key_path":      tlsKey,
@@ -300,10 +307,14 @@ func (s *Server) handleHostRestart(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// handleHostUpdateRestart pulls the latest source, then rebuilds & restarts —
-// the supervisor (start-keep.cmd) does the `git pull` on exit code 43.
+// handleHostUpdateRestart installs the latest version and restarts. Portable
+// Keeps download + swap the release binary from GitHub (self-update); source
+// builds pull the latest source then rebuild (the supervisor does `git pull` on
+// exit code 43). The download can take a moment, so we reply first and run it in
+// the background — the console polls /host/state for the outcome.
 func (s *Server) handleHostUpdateRestart(w http.ResponseWriter, r *http.Request) {
-	if s.updateFn == nil {
+	apply := s.applyUpdate()
+	if apply == nil {
 		writeError(w, http.StatusNotImplemented,
 			"update is unavailable — launch the Keep via start-keep.cmd to enable it")
 		return
@@ -311,14 +322,25 @@ func (s *Server) handleHostUpdateRestart(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"updating": true})
 	go func() {
 		time.Sleep(400 * time.Millisecond)
-		s.updateFn()
+		apply()
 	}()
 }
 
-// handleHostCheckUpdates reports how many commits the local source is behind the
-// upstream branch — a best-effort "search for new versions". Requires git + a
-// remote; any failure (no git, no remote, detached) returns available:false.
+// handleHostCheckUpdates searches for a newer version. Portable Keeps compare
+// against the GitHub release manifest; source builds report how many commits the
+// local checkout is behind its upstream. Any failure returns available:false.
 func (s *Server) handleHostCheckUpdates(w http.ResponseWriter, r *http.Request) {
+	if s.selfUpdate != nil {
+		st := update.Check(update.Repo, ServerVersion)
+		s.SetUpdateStatus(st.Latest, st.Behind, st.Err)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"available": st.Behind,
+			"latest":    st.Latest,
+			"current":   st.Current,
+			"error":     st.Err,
+		})
+		return
+	}
 	if out, err := exec.Command("git", "fetch", "--quiet").CombinedOutput(); err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"available": false,

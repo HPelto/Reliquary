@@ -240,6 +240,12 @@ function renderState(st) {
   $('restartRow').classList.toggle('hidden', !st.restart_available)
   $('updateBtn').style.display = st.update_available ? '' : 'none'
   $('checkBtn').style.display = st.update_available ? '' : 'none'
+  // Passively surface the background self-update check (portable Keeps). Only
+  // set positive "available" here so we never clobber an explicit check result.
+  if (st.self_update && st.update_behind && st.latest_version) {
+    $('checkMsg').style.color = 'var(--gold)'
+    $('checkMsg').textContent = `Update available — v${st.latest_version} (you're on v${st.version}). Hit Update & Restart.`
+  }
 
   $('userList').innerHTML = st.users.map(u => `
     <div class="row">
@@ -377,7 +383,7 @@ async function restartServer() {
 }
 
 async function updateServer() {
-  if (!confirm('Update & Restart? This pulls the latest version, rebuilds, and restarts — a few seconds of downtime.')) return
+  if (!confirm('Update & Restart? This installs the latest version, then restarts — a few seconds of downtime.')) return
   const btn = $('updateBtn')
   btn.disabled = true
   $('restartMsg').textContent = ''
@@ -401,13 +407,15 @@ async function checkUpdates() {
     const r = await api('/v1/host/check-updates')
     if (r.available) {
       $('checkMsg').style.color = 'var(--gold)'
-      $('checkMsg').textContent = `Update available — ${r.behind} commit${r.behind === 1 ? '' : 's'} behind. Hit Update & Restart.`
+      $('checkMsg').textContent = r.latest
+        ? `Update available — v${r.latest} (you're on v${r.current}). Hit Update & Restart.`
+        : `Update available — ${r.behind} commit${r.behind === 1 ? '' : 's'} behind. Hit Update & Restart.`
     } else if (r.error) {
       $('checkMsg').style.color = 'var(--ember)'
       $('checkMsg').textContent = `Couldn't check: ${r.error}`
     } else {
       $('checkMsg').style.color = 'var(--pulse)'
-      $('checkMsg').textContent = 'Up to date.'
+      $('checkMsg').textContent = r.current ? `Up to date (v${r.current}).` : 'Up to date.'
     }
   } catch (e) {
     $('checkMsg').style.color = 'var(--ember)'

@@ -44,8 +44,14 @@ On the same network (LAN), none of this is needed — it just works.
 
 UPDATING
 --------
-Download the newest "Keep-Portable" zip from the Releases page and replace
-keep.exe with the new one (keep your keep.db and media/ folder).
+The Keep updates itself. It checks for new releases on startup and once a day;
+when one is out, the Host Console (/admin) shows "Update available". Click
+Update & Restart and it downloads the new version, verifies it, swaps itself in,
+and restarts — your keep.db and media/ are untouched.
+
+Prefer to do it by hand? Download the newest "Keep-Portable" zip from the
+Releases page and replace keep.exe with the new one (keep your keep.db and
+media/ folder).
 
 
 More docs: https://github.com/HPelto/Reliquary
