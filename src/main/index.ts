@@ -153,7 +153,8 @@ app.whenReady().then(() => {
   const ALLOWED_PERMISSIONS = new Set<string>([
     'media', // microphone for voice (covers camera too, if video ever lands)
     'speaker-selection', // output-device picker (HTMLAudioElement.setSinkId)
-    'clipboard-sanitized-write' // Copy User ID / invite link / recovery key
+    'clipboard-sanitized-write', // Copy User ID / invite link / recovery key
+    'fullscreen' // the custom video player's full-screen button
     // 'notifications'   // ← uncomment when notification delivery ships
     // 'display-capture' // ← uncomment when screen share ships (also wire setDisplayMediaRequestHandler)
   ])

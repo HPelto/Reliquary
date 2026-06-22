@@ -1,17 +1,9 @@
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import {
-  ChevronLeft,
-  ChevronRight,
-  Download,
-  File as FileIcon,
-  Film,
-  Music,
-  Play,
-  X
-} from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, File as FileIcon, Music, Play, X } from 'lucide-react'
 import { getKeep } from '@/net/bind'
 import { attachmentKind, type Attachment } from '@/net/keep'
+import { VideoPlayer } from './VideoPlayer'
 
 const SINGLE_MAX = { w: 420, h: 340 }
 
@@ -93,28 +85,13 @@ function VisualMedia({
     const box = fitBox(a)
     if (attachmentKind(a) === 'video') {
       return (
-        <div className="group/vid relative w-fit max-w-full overflow-hidden rounded-lg border border-edge bg-void-0">
-          <video
-            src={url(a)}
-            controls
-            preload="metadata"
-            style={{ width: box.width, height: box.height, maxWidth: '100%' }}
-            className="block"
-          />
-          {/* hover-only chrome, like the timeline controls — keeps the preview clean */}
-          <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-2 bg-gradient-to-b from-void-0/85 to-transparent px-3 py-2 opacity-0 transition-opacity group-hover/vid:opacity-100">
-            <Film size={12} className="shrink-0 text-relic" />
-            <span className="truncate text-[11.5px] text-hi">{a.name}</span>
-            <a
-              href={dl(a)}
-              download={a.name}
-              className="pointer-events-auto ml-auto shrink-0 text-mid transition-colors hover:text-hi"
-              title="Download"
-            >
-              <Download size={14} />
-            </a>
-          </div>
-        </div>
+        <VideoPlayer
+          src={url(a)}
+          name={a.name}
+          downloadUrl={dl(a)}
+          onExpand={() => onOpen(items, 0)}
+          boxStyle={{ width: box.width, height: box.height }}
+        />
       )
     }
     return (
@@ -298,12 +275,13 @@ export function Lightbox({
           </button>
         )}
         {isVid ? (
-          <video
+          <VideoPlayer
             key={cur.hash}
             src={url(cur)}
-            controls
+            name={cur.name}
+            downloadUrl={dl(cur)}
             autoPlay
-            className="max-h-full max-w-full rounded-lg shadow-[0_20px_80px_-12px_rgba(0,0,0,0.9)]"
+            large
           />
         ) : (
           <img
