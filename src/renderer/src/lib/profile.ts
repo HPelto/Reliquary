@@ -74,8 +74,6 @@ export interface PendingAttachment {
   previewUrl?: string // object URL for the composer thumbnail (images only)
 }
 
-export const MAX_ATTACHMENT_BYTES = 100 << 20 // 100 MiB — matches the Keep
-
 function imageSize(url: string): Promise<{ width: number; height: number }> {
   return new Promise((resolve) => {
     const img = new Image()
@@ -85,11 +83,9 @@ function imageSize(url: string): Promise<{ width: number; height: number }> {
   })
 }
 
-/** Hash + stage any picked File (any type). Reads dimensions for images only. */
+/** Hash + stage any picked File (any type, any size). The per-Keep upload limit
+ *  is enforced by the caller (against the Keep's max_upload_mb) and the server. */
 export async function fileToPendingAttachment(file: File): Promise<PendingAttachment> {
-  if (file.size > MAX_ATTACHMENT_BYTES) {
-    throw new Error('File must be 100 MB or smaller.')
-  }
   const bytes = new Uint8Array(await file.arrayBuffer())
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as BufferSource))
   const hash = [...digest].map((b) => b.toString(16).padStart(2, '0')).join('')
