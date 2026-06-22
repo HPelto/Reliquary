@@ -61,6 +61,31 @@ export async function fileToMediaRef(file: File): Promise<MediaRef> {
   return { hash, type: file.type, dataUrl }
 }
 
+/** A picked image staged for sending: the upload ref + display metadata. */
+export interface PendingAttachment {
+  ref: MediaRef
+  name: string
+  width: number
+  height: number
+  size: number
+}
+
+function imageSize(dataUrl: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight })
+    img.onerror = () => resolve({ width: 0, height: 0 })
+    img.src = dataUrl
+  })
+}
+
+/** Read a picked image File into a PendingAttachment (validates type/size, reads dimensions). */
+export async function fileToPendingAttachment(file: File): Promise<PendingAttachment> {
+  const ref = await fileToMediaRef(file)
+  const { width, height } = await imageSize(ref.dataUrl)
+  return { ref, name: file.name, width, height, size: file.size }
+}
+
 /** Convert a stored data URL back to raw bytes for upload to a Keep. */
 export function mediaRefToBytes(ref: MediaRef): Uint8Array {
   const base64 = ref.dataUrl.slice(ref.dataUrl.indexOf(',') + 1)

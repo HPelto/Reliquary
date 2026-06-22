@@ -97,6 +97,8 @@ func New(st *store.Store, hub *gateway.Hub, cfg Config) *Server {
 				r.Get("/world", s.handleWorld)
 				r.Get("/channels/{id}/messages", s.handleListMessages)
 				r.Post("/channels/{id}/messages", s.handleCreateMessage)
+				r.Patch("/channels/{id}/messages/{mid}", s.handleEditMessage)
+				r.Delete("/channels/{id}/messages/{mid}", s.handleDeleteMessage)
 				r.Post("/invites", s.handleCreateInvite)
 				r.Patch("/profile", s.handlePatchProfile)
 				r.Get("/media/{hash}/exists", s.handleMediaExists)
@@ -272,8 +274,42 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"messages": msgs})
 }
 
+const maxAttachments = 10
+
 type createMessageReq struct {
-	Content string `json:"content"`
+	Content     string             `json:"content"`
+	Attachments []store.Attachment `json:"attachments"`
+}
+
+// validateAttachments caps the count and confirms each referenced blob was
+// actually uploaded to this Keep's media store (clients upload bytes first, then
+// reference them by hash). Returns a client-safe message on rejection.
+func (s *Server) validateAttachments(in []store.Attachment) ([]store.Attachment, string) {
+	if len(in) > maxAttachments {
+		return nil, "too many attachments (max 10)"
+	}
+	out := make([]store.Attachment, 0, len(in))
+	for _, a := range in {
+		if a.Hash == "" {
+			return nil, "attachment is missing its hash"
+		}
+		exists, err := s.st.MediaExists(a.Hash)
+		if err != nil {
+			return nil, "storage error"
+		}
+		if !exists {
+			return nil, "attachment must be uploaded before it can be sent"
+		}
+		name := strings.TrimSpace(a.Name)
+		if len(name) > 200 {
+			name = name[:200]
+		}
+		out = append(out, store.Attachment{
+			Hash: a.Hash, Name: name, ContentType: a.ContentType,
+			Width: a.Width, Height: a.Height, Size: a.Size,
+		})
+	}
+	return out, ""
 }
 
 func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
@@ -291,18 +327,105 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Content = strings.TrimSpace(req.Content)
-	if req.Content == "" || len(req.Content) > 4000 {
-		writeError(w, http.StatusBadRequest, "content must be 1-4000 characters")
+	if len(req.Content) > 4000 {
+		writeError(w, http.StatusBadRequest, "content must be at most 4000 characters")
+		return
+	}
+	attachments, aerr := s.validateAttachments(req.Attachments)
+	if aerr != "" {
+		writeError(w, http.StatusBadRequest, aerr)
+		return
+	}
+	// a message must carry something — text or at least one attachment
+	if req.Content == "" && len(attachments) == 0 {
+		writeError(w, http.StatusBadRequest, "a message needs text or an attachment")
 		return
 	}
 	user := userFrom(r.Context())
-	msg, err := s.st.CreateMessage(ch.ID, user.ID, req.Content)
+	msg, err := s.st.CreateMessage(ch.ID, user.ID, req.Content, attachments)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "storage error")
 		return
 	}
 	s.hub.Broadcast("MESSAGE_CREATE", msg)
 	writeJSON(w, http.StatusCreated, msg)
+}
+
+func (s *Server) messageFromPath(w http.ResponseWriter, r *http.Request) (store.Message, bool) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "mid"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad message id")
+		return store.Message{}, false
+	}
+	msg, err := s.st.MessageByID(id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "no such message")
+		return store.Message{}, false
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return store.Message{}, false
+	}
+	return msg, true
+}
+
+type editMessageReq struct {
+	Content string `json:"content"`
+}
+
+// handleEditMessage edits a message's text. Author-only — not even admins can
+// rewrite someone else's words (they can delete, below).
+func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
+	msg, ok := s.messageFromPath(w, r)
+	if !ok {
+		return
+	}
+	user := userFrom(r.Context())
+	if msg.Author.ID != user.ID {
+		writeError(w, http.StatusForbidden, "only the author can edit a message")
+		return
+	}
+	var req editMessageReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	req.Content = strings.TrimSpace(req.Content)
+	if len(req.Content) > 4000 {
+		writeError(w, http.StatusBadRequest, "content must be at most 4000 characters")
+		return
+	}
+	if req.Content == "" && len(msg.Attachments) == 0 {
+		writeError(w, http.StatusBadRequest, "a message needs text or an attachment")
+		return
+	}
+	updated, err := s.st.UpdateMessage(msg.ID, user.ID, req.Content)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+	s.hub.Broadcast("MESSAGE_UPDATE", updated)
+	writeJSON(w, http.StatusOK, updated)
+}
+
+// handleDeleteMessage removes a message. The author can delete their own; owners
+// and admins can delete anyone's (moderation).
+func (s *Server) handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
+	msg, ok := s.messageFromPath(w, r)
+	if !ok {
+		return
+	}
+	user := userFrom(r.Context())
+	if msg.Author.ID != user.ID && !s.isManager(r) {
+		writeError(w, http.StatusForbidden, "you can only delete your own messages")
+		return
+	}
+	if err := s.st.DeleteMessage(msg.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+	s.hub.Broadcast("MESSAGE_DELETE", map[string]any{"id": msg.ID, "channel_id": msg.ChannelID})
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": msg.ID})
 }
 
 // ── invites ─────────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -69,12 +70,26 @@ type Channel struct {
 	Position int    `json:"position"`
 }
 
+// Attachment is an image (or other media) carried by a message. The bytes live
+// in the content-addressed media table; this is the per-message metadata the
+// client supplies on send (it knows the dimensions after decoding the image).
+type Attachment struct {
+	Hash        string `json:"hash"`
+	Name        string `json:"name"`
+	ContentType string `json:"content_type"`
+	Width       int    `json:"width"`
+	Height      int    `json:"height"`
+	Size        int64  `json:"size"`
+}
+
 type Message struct {
-	ID        int64  `json:"id"`
-	ChannelID int64  `json:"channel_id"`
-	Author    User   `json:"author"`
-	Content   string `json:"content"`
-	CreatedAt int64  `json:"created_at"` // unix ms
+	ID          int64        `json:"id"`
+	ChannelID   int64        `json:"channel_id"`
+	Author      User         `json:"author"`
+	Content     string       `json:"content"`
+	Attachments []Attachment `json:"attachments"`
+	CreatedAt   int64        `json:"created_at"` // unix ms
+	EditedAt    int64        `json:"edited_at"`  // unix ms, 0 = never edited
 }
 
 type Invite struct {
@@ -210,6 +225,18 @@ CREATE TABLE IF NOT EXISTS events (
 	if !s.columnExists("events", "ends_at") {
 		if _, err := s.db.Exec(`ALTER TABLE events ADD COLUMN ends_at INTEGER NOT NULL DEFAULT 0`); err != nil {
 			return err
+		}
+	}
+
+	// message attachments + edit timestamp added after messaging shipped
+	for _, col := range []struct{ name, ddl string }{
+		{"attachments", "attachments TEXT NOT NULL DEFAULT '[]'"},
+		{"edited_at", "edited_at INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if !s.columnExists("messages", col.name) {
+			if _, err := s.db.Exec(`ALTER TABLE messages ADD COLUMN ` + col.ddl); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -486,22 +513,93 @@ func (s *Store) ChannelByID(id int64) (Channel, error) {
 	return c, err
 }
 
-func (s *Store) CreateMessage(channelID, authorID int64, content string) (Message, error) {
+func (s *Store) CreateMessage(channelID, authorID int64, content string, attachments []Attachment) (Message, error) {
 	author, err := scanUser(s.db.QueryRow(
 		`SELECT `+userCols+` FROM profiles WHERE id = ?`, authorID))
 	if err != nil {
 		return Message{}, err
 	}
+	if attachments == nil {
+		attachments = []Attachment{}
+	}
+	attachJSON, _ := json.Marshal(attachments)
 	created := nowMS()
 	res, err := s.db.Exec(
-		`INSERT INTO messages (channel_id, author_id, content, created_at) VALUES (?, ?, ?, ?)`,
-		channelID, authorID, content, created,
+		`INSERT INTO messages (channel_id, author_id, content, attachments, created_at) VALUES (?, ?, ?, ?, ?)`,
+		channelID, authorID, content, string(attachJSON), created,
 	)
 	if err != nil {
 		return Message{}, err
 	}
 	id, _ := res.LastInsertId()
-	return Message{ID: id, ChannelID: channelID, Author: author, Content: content, CreatedAt: created}, nil
+	return Message{ID: id, ChannelID: channelID, Author: author, Content: content, Attachments: attachments, CreatedAt: created}, nil
+}
+
+// shared message SELECT — keep Messages() and MessageByID() in lockstep.
+const msgCols = `m.id, m.channel_id, m.content, m.attachments, m.created_at, m.edited_at,
+	             u.id, u.pubkey, u.fingerprint, u.username, u.accent, u.role,
+	             u.about, u.status, u.avatar, u.background, u.name_font, u.name_effect, u.name_color`
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanMessage(sc rowScanner) (Message, error) {
+	var m Message
+	var attachJSON string
+	if err := sc.Scan(&m.ID, &m.ChannelID, &m.Content, &attachJSON, &m.CreatedAt, &m.EditedAt,
+		&m.Author.ID, &m.Author.Pubkey, &m.Author.Fingerprint,
+		&m.Author.Username, &m.Author.Accent, &m.Author.Role,
+		&m.Author.About, &m.Author.Status, &m.Author.Avatar, &m.Author.Background,
+		&m.Author.NameFont, &m.Author.NameEffect, &m.Author.NameColor); err != nil {
+		return Message{}, err
+	}
+	if attachJSON != "" {
+		_ = json.Unmarshal([]byte(attachJSON), &m.Attachments)
+	}
+	if m.Attachments == nil {
+		m.Attachments = []Attachment{}
+	}
+	return m, nil
+}
+
+// MessageByID fetches one message (used to authorize edit/delete and to return
+// the post-edit state). Returns ErrNotFound if it doesn't exist.
+func (s *Store) MessageByID(id int64) (Message, error) {
+	m, err := scanMessage(s.db.QueryRow(
+		`SELECT `+msgCols+` FROM messages m JOIN profiles u ON u.id = m.author_id WHERE m.id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Message{}, ErrNotFound
+	}
+	return m, err
+}
+
+// UpdateMessage edits content (author-only — author_id is part of the WHERE so
+// a non-author update affects no rows and returns ErrNotFound). Stamps edited_at.
+func (s *Store) UpdateMessage(id, authorID int64, content string) (Message, error) {
+	res, err := s.db.Exec(
+		`UPDATE messages SET content = ?, edited_at = ? WHERE id = ? AND author_id = ?`,
+		content, nowMS(), id, authorID)
+	if err != nil {
+		return Message{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Message{}, ErrNotFound
+	}
+	return s.MessageByID(id)
+}
+
+// DeleteMessage removes a message. Authorization (author or admin/owner) is the
+// caller's job — verify via MessageByID first.
+func (s *Store) DeleteMessage(id int64) error {
+	res, err := s.db.Exec(`DELETE FROM messages WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // Messages returns up to limit messages in a channel, oldest first, optionally
@@ -510,9 +608,7 @@ func (s *Store) Messages(channelID int64, limit int, before int64) ([]Message, e
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
-	q := `SELECT m.id, m.channel_id, m.content, m.created_at,
-	             u.id, u.pubkey, u.fingerprint, u.username, u.accent, u.role,
-	             u.about, u.status, u.avatar, u.background, u.name_font, u.name_effect, u.name_color
+	q := `SELECT ` + msgCols + `
 	      FROM messages m JOIN profiles u ON u.id = m.author_id
 	      WHERE m.channel_id = ?`
 	args := []any{channelID}
@@ -529,12 +625,8 @@ func (s *Store) Messages(channelID int64, limit int, before int64) ([]Message, e
 	defer rows.Close()
 	var out []Message
 	for rows.Next() {
-		var m Message
-		if err := rows.Scan(&m.ID, &m.ChannelID, &m.Content, &m.CreatedAt,
-			&m.Author.ID, &m.Author.Pubkey, &m.Author.Fingerprint,
-			&m.Author.Username, &m.Author.Accent, &m.Author.Role,
-			&m.Author.About, &m.Author.Status, &m.Author.Avatar, &m.Author.Background,
-			&m.Author.NameFont, &m.Author.NameEffect, &m.Author.NameColor); err != nil {
+		m, err := scanMessage(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, m)

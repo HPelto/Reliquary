@@ -1,12 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bell, Gift, Hash, Pin, SendHorizontal, SmilePlus, Users } from 'lucide-react'
+import {
+  BarChart2,
+  Bell,
+  Hash,
+  ImagePlus,
+  LayoutGrid,
+  Pin,
+  Plus,
+  SendHorizontal,
+  SmilePlus,
+  Users,
+  X
+} from 'lucide-react'
 import { hostTag } from '@/lib/relic'
 import { nameColorFor } from '@/lib/nameStyle'
+import { fileToPendingAttachment, type PendingAttachment } from '@/lib/profile'
 import { getKeep } from '@/net/bind'
-import type { KeepMessage } from '@/net/keep'
+import type { Attachment, KeepMessage } from '@/net/keep'
 import { useUi, useWorld } from '@/store'
+import { AttachmentGrid, Lightbox } from './Attachments'
 import { KeepAvatar } from './KeepAvatar'
 import { Md } from './Markdown'
+import { MessageMenu, type MenuTarget } from './MessageMenu'
 import { StyledName } from './StyledName'
 
 function timeOf(ms: number): string {
@@ -17,17 +32,37 @@ function MessageRow({
   msg,
   grouped,
   instanceId,
-  locked
+  locked,
+  editing,
+  onContextMenu,
+  onEditSubmit,
+  onEditCancel,
+  onOpenLightbox
 }: {
   msg: KeepMessage
   grouped: boolean
   instanceId: string
   locked: boolean
+  editing: boolean
+  onContextMenu: (e: React.MouseEvent, msg: KeepMessage) => void
+  onEditSubmit: (msg: KeepMessage, content: string) => void
+  onEditCancel: () => void
+  onOpenLightbox: (items: Attachment[], index: number) => void
 }): React.JSX.Element {
   const a = msg.author
   const viewUser = useUi((s) => s.viewUser)
+  const [edit, setEdit] = useState(msg.content)
+  useEffect(() => {
+    if (editing) setEdit(msg.content)
+  }, [editing, msg.content])
+
   return (
-    <div className="msg-in group relative rounded-lg px-3 py-0.5 transition-colors duration-100 hover:bg-void-2/50">
+    <div
+      onContextMenu={(e) => onContextMenu(e, msg)}
+      className={`msg-in group relative rounded-lg px-3 py-0.5 transition-colors duration-100 hover:bg-void-2/50 ${
+        grouped ? 'mt-0.5' : 'mt-3'
+      }`}
+    >
       <div className="flex gap-3">
         {grouped ? (
           <span className="w-9 shrink-0 pt-1 text-right font-mono text-[9px] text-lo opacity-0 group-hover:opacity-100">
@@ -54,9 +89,51 @@ function MessageRow({
               <span className="font-mono text-[10px] text-lo">{timeOf(msg.created_at)}</span>
             </div>
           )}
-          <p className="text-[13.5px] leading-[1.55] break-words text-hi/90 select-text">
-            <Md text={msg.content} />
-          </p>
+          {editing ? (
+            <div className="mt-0.5">
+              <textarea
+                autoFocus
+                value={edit}
+                onChange={(e) => setEdit(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    onEditSubmit(msg, edit)
+                  } else if (e.key === 'Escape') {
+                    onEditCancel()
+                  }
+                }}
+                rows={Math.min(8, edit.split('\n').length)}
+                className="w-full resize-none rounded-lg border border-edge bg-void-2 px-3 py-2 text-[13.5px] text-hi outline-none focus:border-[var(--accent)]/40"
+              />
+              <div className="mt-1 text-[11px] text-lo">
+                escape to{' '}
+                <button onClick={onEditCancel} className="text-mid hover:text-hi">
+                  cancel
+                </button>{' '}
+                · enter to{' '}
+                <button onClick={() => onEditSubmit(msg, edit)} className="text-mid hover:text-hi">
+                  save
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {msg.content && (
+                <p className="text-[13.5px] leading-[1.55] break-words text-hi/90 select-text">
+                  <Md text={msg.content} />
+                  {!!msg.edited_at && <span className="ml-1 text-[10px] text-lo">(edited)</span>}
+                </p>
+              )}
+              {msg.attachments && msg.attachments.length > 0 && (
+                <AttachmentGrid
+                  items={msg.attachments}
+                  instanceId={instanceId}
+                  onOpen={(i) => onOpenLightbox(msg.attachments as Attachment[], i)}
+                />
+              )}
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -67,7 +144,14 @@ export function ChatArea(): React.JSX.Element | null {
   const { activeServerId, activeChannelId, toggleMembers, connections, setKeepMessages } = useUi()
   const { servers, instances } = useWorld()
   const [draft, setDraft] = useState('')
+  const [menu, setMenu] = useState<MenuTarget | null>(null)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [lightbox, setLightbox] = useState<{ items: Attachment[]; index: number } | null>(null)
+  const [pending, setPending] = useState<PendingAttachment[]>([])
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [sending, setSending] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
 
   const server = servers.find((s) => s.id === activeServerId)
   const instance = server ? instances.find((i) => i.id === server.instanceId) : undefined
@@ -95,11 +179,50 @@ export function ChatArea(): React.JSX.Element | null {
 
   if (!server) return null
 
-  const send = (): void => {
+  const self = getKeep(server.instanceId)?.self
+  const canManage = self?.role === 'owner' || self?.role === 'admin'
+
+  const send = async (): Promise<void> => {
     const content = draft.trim()
-    if (!content || !channel || isVoice) return
-    setDraft('')
-    void getKeep(server.instanceId)?.sendMessage(channel.id, content)
+    if ((!content && pending.length === 0) || !channel || isVoice || sending) return
+    const conn = getKeep(server.instanceId)
+    if (!conn) return
+    setSending(true)
+    try {
+      const uploaded = await Promise.all(pending.map((p) => conn.uploadAttachment(p)))
+      await conn.sendMessage(channel.id, content, uploaded)
+      setDraft('')
+      setPending([])
+    } catch {
+      /* leave the draft + pending so the user can retry */
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const onFiles = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = ''
+    const added: PendingAttachment[] = []
+    for (const f of files) {
+      try {
+        added.push(await fileToPendingAttachment(f))
+      } catch {
+        /* skip non-image / too-large files */
+      }
+    }
+    setPending((p) => [...p, ...added].slice(0, 10))
+  }
+
+  const submitEdit = (msg: KeepMessage, content: string): void => {
+    setEditingId(null)
+    const c = content.trim()
+    if (c === msg.content || (!c && !(msg.attachments && msg.attachments.length > 0))) return
+    void getKeep(server.instanceId)?.editMessage(msg.channel_id, msg.id, c).catch(() => {})
+  }
+
+  const doDelete = (msg: KeepMessage): void => {
+    void getKeep(server.instanceId)?.deleteMessage(msg.channel_id, msg.id).catch(() => {})
   }
 
   return (
@@ -129,7 +252,7 @@ export function ChatArea(): React.JSX.Element | null {
 
       {/* messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-4 scroll-thin">
-        <div className="mx-auto flex max-w-[860px] flex-col gap-2">
+        <div className="mx-auto flex max-w-[860px] flex-col">
           {!channel ? (
             <p className="px-3 text-[13px] text-lo">Pick a channel on the left.</p>
           ) : (
@@ -165,6 +288,14 @@ export function ChatArea(): React.JSX.Element | null {
                     msg={m}
                     instanceId={server.instanceId}
                     locked={!!keep?.world?.lock_name_style}
+                    editing={editingId === m.id}
+                    onContextMenu={(e, msg) => {
+                      e.preventDefault()
+                      setMenu({ msg, x: e.clientX, y: e.clientY })
+                    }}
+                    onEditSubmit={submitEdit}
+                    onEditCancel={() => setEditingId(null)}
+                    onOpenLightbox={(items, index) => setLightbox({ items, index })}
                     grouped={
                       i > 0 &&
                       msgs[i - 1].author.id === m.author.id &&
@@ -180,36 +311,119 @@ export function ChatArea(): React.JSX.Element | null {
 
       {/* composer */}
       <div className="shrink-0 px-4 pb-4">
-        <div className="mx-auto flex max-w-[860px] items-center gap-2 rounded-xl border border-edge bg-void-2 px-3 py-2.5 transition-colors duration-200 focus-within:border-[var(--accent)]/40 focus-within:shadow-[0_0_24px_-6px_var(--accent)]">
-          <button className="text-lo transition-colors hover:text-pulse">
-            <Gift size={18} />
-          </button>
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                send()
+        <div className="mx-auto max-w-[860px]">
+          {pending.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-2 rounded-xl border border-edge bg-void-2 p-2">
+              {pending.map((p, i) => (
+                <div
+                  key={p.ref.hash + i}
+                  className="group/att relative h-20 w-20 overflow-hidden rounded-lg border border-edge"
+                >
+                  <img src={p.ref.dataUrl} alt={p.name} className="h-full w-full object-cover" />
+                  <button
+                    onClick={() => setPending((arr) => arr.filter((_, j) => j !== i))}
+                    className="absolute right-1 top-1 rounded-md bg-void-0/80 p-0.5 text-mid opacity-0 transition group-hover/att:opacity-100 hover:text-ember"
+                    title="Remove"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-2 rounded-xl border border-edge bg-void-2 px-3 py-2.5 transition-colors duration-200 focus-within:border-[var(--accent)]/40 focus-within:shadow-[0_0_24px_-6px_var(--accent)]">
+            <div className="relative">
+              <button
+                onClick={() => setUploadOpen((v) => !v)}
+                disabled={isVoice || !channel}
+                className="text-lo transition-colors hover:text-[var(--accent)] disabled:opacity-40"
+                title="Upload"
+              >
+                <Plus size={20} />
+              </button>
+              {uploadOpen && (
+                <>
+                  <div className="fixed inset-0 z-[110]" onMouseDown={() => setUploadOpen(false)} />
+                  <div className="glass palette-in absolute bottom-9 left-0 z-[120] w-[184px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]">
+                    <button
+                      onClick={() => {
+                        setUploadOpen(false)
+                        fileRef.current?.click()
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-mid transition-colors hover:bg-void-3 hover:text-hi"
+                    >
+                      <ImagePlus size={15} className="text-[var(--accent)]" /> Upload a File
+                    </button>
+                    <div className="flex w-full cursor-not-allowed items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] text-lo/60">
+                      <BarChart2 size={15} /> Create Poll
+                      <span className="ml-auto text-[10px]">soon</span>
+                    </div>
+                    <div className="flex w-full cursor-not-allowed items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] text-lo/60">
+                      <LayoutGrid size={15} /> Use Apps
+                      <span className="ml-auto text-[10px]">soon</span>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  void send()
+                }
+              }}
+              placeholder={
+                isVoice ? 'Voice channels have no text — yet' : `Message #${channel?.name ?? ''}`
               }
-            }}
-            placeholder={
-              isVoice ? 'Voice channels have no text — yet' : `Message #${channel?.name ?? ''}`
-            }
-            disabled={isVoice || !channel}
-            className="min-w-0 flex-1 bg-transparent text-[13.5px] text-hi outline-none select-text placeholder:text-lo disabled:opacity-50"
-          />
-          <button className="text-lo transition-colors hover:text-gold">
-            <SmilePlus size={18} />
-          </button>
-          <button
-            onClick={send}
-            className="rounded-lg bg-[var(--accent)]/15 p-1.5 text-[var(--accent)] transition-all duration-150 hover:bg-[var(--accent)] hover:text-void-0"
-          >
-            <SendHorizontal size={16} />
-          </button>
+              disabled={isVoice || !channel}
+              className="min-w-0 flex-1 bg-transparent text-[13.5px] text-hi outline-none select-text placeholder:text-lo disabled:opacity-50"
+            />
+            <button className="text-lo transition-colors hover:text-gold">
+              <SmilePlus size={18} />
+            </button>
+            <button
+              onClick={() => void send()}
+              disabled={sending || isVoice || !channel}
+              className="rounded-lg bg-[var(--accent)]/15 p-1.5 text-[var(--accent)] transition-all duration-150 hover:bg-[var(--accent)] hover:text-void-0 disabled:opacity-40 disabled:hover:bg-[var(--accent)]/15 disabled:hover:text-[var(--accent)]"
+            >
+              <SendHorizontal size={16} />
+            </button>
+          </div>
         </div>
       </div>
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp"
+        multiple
+        hidden
+        onChange={(e) => void onFiles(e)}
+      />
+
+      {menu && (
+        <MessageMenu
+          target={menu}
+          canEdit={!!self && menu.msg.author.id === self.id}
+          canDelete={!!self && (menu.msg.author.id === self.id || canManage)}
+          onEdit={() => setEditingId(menu.msg.id)}
+          onDelete={() => doDelete(menu.msg)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
+      {lightbox && (
+        <Lightbox
+          items={lightbox.items}
+          index={lightbox.index}
+          instanceId={server.instanceId}
+          onIndex={(i) => setLightbox((lb) => (lb ? { ...lb, index: i } : lb))}
+          onClose={() => setLightbox(null)}
+        />
+      )}
     </main>
   )
 }

@@ -285,6 +285,35 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("expected 1 message, got %v", list)
 	}
 
+	// edit + delete authorization
+	msgID := int64(msg["id"].(float64))
+	edited := owner.do("PATCH", fmt.Sprintf("/v1/channels/%d/messages/%d", tavernID, msgID),
+		map[string]string{"content": "the keep endures"}, 200)
+	if edited["content"] != "the keep endures" {
+		t.Fatalf("edit didn't apply: %v", edited)
+	}
+	if edited["edited_at"].(float64) == 0 {
+		t.Fatalf("edited_at not stamped: %v", edited)
+	}
+	// a non-author member can neither edit nor delete someone else's message
+	guest.do("PATCH", fmt.Sprintf("/v1/channels/%d/messages/%d", tavernID, msgID),
+		map[string]string{"content": "hijack"}, 403)
+	guest.do("DELETE", fmt.Sprintf("/v1/channels/%d/messages/%d", tavernID, msgID), nil, 403)
+	// the author can delete their own; afterwards it's gone and editing 404s
+	owner.do("DELETE", fmt.Sprintf("/v1/channels/%d/messages/%d", tavernID, msgID), nil, 200)
+	gone := owner.do("GET", fmt.Sprintf("/v1/channels/%d/messages?limit=50", tavernID), nil, 200)
+	if len(gone["messages"].([]any)) != 0 {
+		t.Fatalf("message should be deleted, got %v", gone)
+	}
+	owner.do("PATCH", fmt.Sprintf("/v1/channels/%d/messages/%d", tavernID, msgID),
+		map[string]string{"content": "ghost"}, 404)
+
+	// attachments must reference already-uploaded media; empty + no media is rejected
+	owner.do("POST", fmt.Sprintf("/v1/channels/%d/messages", tavernID),
+		map[string]any{"attachments": []map[string]any{{"hash": "deadbeef", "name": "x.png", "content_type": "image/png"}}}, 400)
+	owner.do("POST", fmt.Sprintf("/v1/channels/%d/messages", tavernID),
+		map[string]string{"content": "   "}, 400)
+
 	// members may not mint invites
 	guest.do("POST", "/v1/invites", map[string]int{}, 403)
 

@@ -52,6 +52,8 @@ export function createKeep(
       updateWorld(instanceId, { name: world.name })
     },
     onMessage: (msg) => useUi.getState().appendKeepMessage(instanceId, msg),
+    onMessageUpdate: (msg) => useUi.getState().updateMessage(instanceId, msg),
+    onMessageDelete: (channelId, id) => useUi.getState().removeMessage(instanceId, channelId, id),
     onPresence: (userId, online, state) => {
       const { connections, setKeep } = useUi.getState()
       const world = connections[instanceId]?.world

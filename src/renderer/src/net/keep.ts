@@ -8,7 +8,7 @@
 
 // relative imports so this module also runs under plain Node for headless tests
 import { signNonce } from '../lib/identity'
-import { mediaRefToBytes, type Profile } from '../lib/profile'
+import { mediaRefToBytes, type PendingAttachment, type Profile } from '../lib/profile'
 
 export interface KeepChannel {
   id: number
@@ -43,12 +43,23 @@ export interface KeepMember extends KeepUser {
   state?: MemberState
 }
 
+export interface Attachment {
+  hash: string
+  name: string
+  content_type: string
+  width: number
+  height: number
+  size: number
+}
+
 export interface KeepMessage {
   id: number
   channel_id: number
   author: KeepUser
   content: string
+  attachments?: Attachment[]
   created_at: number
+  edited_at?: number // unix ms, 0/undefined = never edited
 }
 
 export interface KeepEvent {
@@ -88,6 +99,8 @@ export interface KeepEvents {
   onStatus?: (status: KeepStatus) => void
   onWorld?: (world: KeepWorld) => void
   onMessage?: (msg: KeepMessage) => void
+  onMessageUpdate?: (msg: KeepMessage) => void
+  onMessageDelete?: (channelId: number, id: number) => void
   onPresence?: (userId: number, online: boolean, state: MemberState) => void
   onMemberJoin?: (user: KeepUser) => void
   onMemberUpdate?: (user: KeepUser) => void
@@ -388,11 +401,41 @@ export class KeepConnection {
   }
 
   /** The sent message comes back via the gateway broadcast — don't double-append. */
-  async sendMessage(channelId: number, content: string): Promise<KeepMessage> {
+  async sendMessage(
+    channelId: number,
+    content: string,
+    attachments?: Attachment[]
+  ): Promise<KeepMessage> {
     return this.request<KeepMessage>(`/v1/channels/${channelId}/messages`, {
       method: 'POST',
+      body: JSON.stringify({ content, attachments: attachments ?? [] })
+    })
+  }
+
+  /** Edit own message. Update echoes back via the MESSAGE_UPDATE broadcast. */
+  async editMessage(channelId: number, id: number, content: string): Promise<KeepMessage> {
+    return this.request<KeepMessage>(`/v1/channels/${channelId}/messages/${id}`, {
+      method: 'PATCH',
       body: JSON.stringify({ content })
     })
+  }
+
+  /** Delete a message (own, or any if owner/admin). Echoes via MESSAGE_DELETE. */
+  async deleteMessage(channelId: number, id: number): Promise<void> {
+    await this.request(`/v1/channels/${channelId}/messages/${id}`, { method: 'DELETE' })
+  }
+
+  /** Ensure a picked image's bytes are on this Keep, then return its wire metadata. */
+  async uploadAttachment(p: PendingAttachment): Promise<Attachment> {
+    if (!(await this.mediaExists(p.ref.hash))) await this.uploadMedia(p.ref)
+    return {
+      hash: p.ref.hash,
+      name: p.name,
+      content_type: p.ref.type,
+      width: p.width,
+      height: p.height,
+      size: p.size
+    }
   }
 
   /** Owner only. ttlSeconds: 0 = server default (7d), -1 = never expires. */
@@ -444,6 +487,14 @@ export class KeepConnection {
       case 'MESSAGE_CREATE':
         this.events.onMessage?.(ev.d as KeepMessage)
         break
+      case 'MESSAGE_UPDATE':
+        this.events.onMessageUpdate?.(ev.d as KeepMessage)
+        break
+      case 'MESSAGE_DELETE': {
+        const d = ev.d as { id: number; channel_id: number }
+        this.events.onMessageDelete?.(d.channel_id, d.id)
+        break
+      }
       case 'PRESENCE_UPDATE': {
         const d = ev.d as { user_id: number; online: boolean; state?: MemberState }
         const state = d.state ?? (d.online ? 'online' : 'offline')

@@ -114,6 +114,8 @@ interface UiState {
   setKeep: (instanceId: string, partial: Partial<KeepState>) => void
   appendKeepMessage: (instanceId: string, msg: KeepMessage) => void
   setKeepMessages: (instanceId: string, channelId: number, msgs: KeepMessage[]) => void
+  updateMessage: (instanceId: string, msg: KeepMessage) => void
+  removeMessage: (instanceId: string, channelId: number, id: number) => void
   renameServer: (serverId: string, name: string) => void
   openPalette: () => void
   closePalette: () => void
@@ -251,6 +253,39 @@ export const useUi = create<UiState>((set) => ({
         connections: {
           ...s.connections,
           [instanceId]: { ...keep, messages: { ...keep.messages, [channelId]: msgs } }
+        }
+      }
+    }),
+  updateMessage: (instanceId, msg) =>
+    set((s) => {
+      const keep = s.connections[instanceId] ?? emptyKeep
+      const existing = keep.messages[msg.channel_id]
+      if (!existing) return {}
+      return {
+        connections: {
+          ...s.connections,
+          [instanceId]: {
+            ...keep,
+            messages: {
+              ...keep.messages,
+              [msg.channel_id]: existing.map((m) => (m.id === msg.id ? msg : m))
+            }
+          }
+        }
+      }
+    }),
+  removeMessage: (instanceId, channelId, id) =>
+    set((s) => {
+      const keep = s.connections[instanceId] ?? emptyKeep
+      const existing = keep.messages[channelId]
+      if (!existing) return {}
+      return {
+        connections: {
+          ...s.connections,
+          [instanceId]: {
+            ...keep,
+            messages: { ...keep.messages, [channelId]: existing.filter((m) => m.id !== id) }
+          }
         }
       }
     }),
