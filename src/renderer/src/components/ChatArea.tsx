@@ -115,7 +115,7 @@ function MessageRow({
           )}
         </button>
       ) : null}
-      <div className="flex gap-3">
+      <div className="flex items-start gap-3">
         {grouped ? (
           <span className="w-9 shrink-0 pt-1 text-right font-mono text-[9px] text-lo opacity-0 group-hover:opacity-100">
             {timeOf(msg.created_at)}
