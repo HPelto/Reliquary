@@ -656,8 +656,12 @@ func TestProfileAndMedia(t *testing.T) {
 	owner.putRaw("/v1/media/"+strings.Repeat("0", 64), "image/gif", gif, 400)
 	// correct upload
 	owner.putRaw("/v1/media/"+hash, "image/gif", gif, 201)
-	// non-image rejected
-	owner.putRaw("/v1/media/"+hash, "text/plain", []byte("nope"), 415)
+	// any file type is accepted now (not just images), as long as the hash matches
+	txt := []byte("a plain text attachment")
+	tsum := sha256.Sum256(txt)
+	thash := hex.EncodeToString(tsum[:])
+	owner.putRaw("/v1/media/"+thash, "text/plain", txt, 201)
+	owner.putRaw("/v1/media/"+thash, "text/plain", []byte("different"), 400) // hash still enforced
 
 	exists = owner.do("GET", "/v1/media/"+hash+"/exists", nil, 200)
 	if exists["exists"] != true {

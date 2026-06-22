@@ -6,6 +6,7 @@ package api
 // the client pushes the same hashes to every Keep it joins.
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,19 +14,31 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"reliquary.gg/keep/internal/store"
 )
 
-const maxMediaBytes = 8 << 20 // 8 MiB
+const maxMediaBytes = 100 << 20 // 100 MiB — covers images, audio, and short video
 
-var allowedMediaTypes = map[string]bool{
-	"image/png":  true,
-	"image/jpeg": true,
-	"image/gif":  true,
-	"image/webp": true,
+// sanitizeFilename strips anything that could break a Content-Disposition header
+// or escape a directory, leaving a safe suggested download name.
+func sanitizeFilename(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == '"' || r == '\\' || r == '/' {
+			return -1
+		}
+		return r
+	}, name)
+	if len(name) > 200 {
+		name = name[:200]
+	}
+	if name == "" {
+		return "download"
+	}
+	return name
 }
 
 // handlePatchProfile lets a signed-in client update its own profile live,
@@ -67,14 +80,13 @@ func (s *Server) handleMediaExists(w http.ResponseWriter, r *http.Request) {
 // hash always names exactly the bytes it returns.
 func (s *Server) handleUploadMedia(w http.ResponseWriter, r *http.Request) {
 	claimed := chi.URLParam(r, "hash")
-	contentType := r.Header.Get("Content-Type")
-	if !allowedMediaTypes[contentType] {
-		writeError(w, http.StatusUnsupportedMediaType, "media must be png, jpeg, gif, or webp")
-		return
+	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	if contentType == "" {
+		contentType = "application/octet-stream"
 	}
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxMediaBytes))
 	if err != nil {
-		writeError(w, http.StatusRequestEntityTooLarge, "media exceeds 8 MB")
+		writeError(w, http.StatusRequestEntityTooLarge, "file exceeds the 100 MB limit")
 		return
 	}
 	sum := sha256.Sum256(data)
@@ -104,5 +116,12 @@ func (s *Server) handleGetMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	_, _ = w.Write(data)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// ?download=<name> forces a save with that filename; without it media is
+	// inline so <img>/<video>/<audio> render it. ServeContent adds Range support
+	// (so video/audio can seek) and conditional-GET handling.
+	if name := r.URL.Query().Get("download"); name != "" {
+		w.Header().Set("Content-Disposition", `attachment; filename="`+sanitizeFilename(name)+`"`)
+	}
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
 }

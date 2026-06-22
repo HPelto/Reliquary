@@ -3,6 +3,7 @@ import {
   BarChart2,
   Bell,
   CornerUpRight,
+  File as FileIcon,
   Hash,
   ImagePlus,
   LayoutGrid,
@@ -20,7 +21,7 @@ import { fileToPendingAttachment, type PendingAttachment } from '@/lib/profile'
 import { getKeep } from '@/net/bind'
 import type { Attachment, KeepMessage } from '@/net/keep'
 import { useUi, useWorld } from '@/store'
-import { AttachmentGrid, Lightbox } from './Attachments'
+import { Lightbox, MessageAttachments } from './Attachments'
 import { KeepAvatar } from './KeepAvatar'
 import { Md } from './Markdown'
 import { MessageMenu, type MenuTarget } from './MessageMenu'
@@ -175,10 +176,10 @@ function MessageRow({
                 </p>
               )}
               {msg.attachments && msg.attachments.length > 0 && (
-                <AttachmentGrid
+                <MessageAttachments
                   items={msg.attachments}
                   instanceId={instanceId}
-                  onOpen={(i) => onOpenLightbox(msg.attachments as Attachment[], i)}
+                  onOpenLightbox={onOpenLightbox}
                 />
               )}
             </>
@@ -249,6 +250,7 @@ export function ChatArea(): React.JSX.Element | null {
       const uploaded = await Promise.all(pending.map((p) => conn.uploadAttachment(p)))
       await conn.sendMessage(channel.id, content, uploaded, replyingTo?.id)
       setDraft('')
+      pending.forEach((p) => p.previewUrl && URL.revokeObjectURL(p.previewUrl))
       setPending([])
       setReplyingTo(null)
     } catch {
@@ -270,6 +272,14 @@ export function ChatArea(): React.JSX.Element | null {
       }
     }
     setPending((p) => [...p, ...added].slice(0, 10))
+  }
+
+  const removePending = (i: number): void => {
+    setPending((arr) => {
+      const p = arr[i]
+      if (p?.previewUrl) URL.revokeObjectURL(p.previewUrl)
+      return arr.filter((_, j) => j !== i)
+    })
   }
 
   const submitEdit = (msg: KeepMessage, content: string): void => {
@@ -445,12 +455,19 @@ export function ChatArea(): React.JSX.Element | null {
             <div className="mb-2 flex flex-wrap gap-2 rounded-xl border border-edge bg-void-2 p-2">
               {pending.map((p, i) => (
                 <div
-                  key={p.ref.hash + i}
-                  className="group/att relative h-20 w-20 overflow-hidden rounded-lg border border-edge"
+                  key={p.hash + i}
+                  className="group/att relative h-20 w-20 overflow-hidden rounded-lg border border-edge bg-void-3"
                 >
-                  <img src={p.ref.dataUrl} alt={p.name} className="h-full w-full object-cover" />
+                  {p.previewUrl ? (
+                    <img src={p.previewUrl} alt={p.name} className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full w-full flex-col items-center justify-center gap-1 px-1 text-center">
+                      <FileIcon size={18} className="text-lo" />
+                      <span className="line-clamp-2 text-[8.5px] break-all text-mid">{p.name}</span>
+                    </div>
+                  )}
                   <button
-                    onClick={() => setPending((arr) => arr.filter((_, j) => j !== i))}
+                    onClick={() => removePending(i)}
                     className="absolute right-1 top-1 rounded-md bg-void-0/80 p-0.5 text-mid opacity-0 transition group-hover/att:opacity-100 hover:text-ember"
                     title="Remove"
                   >
@@ -524,14 +541,7 @@ export function ChatArea(): React.JSX.Element | null {
         </div>
       </div>
 
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/png,image/jpeg,image/gif,image/webp"
-        multiple
-        hidden
-        onChange={(e) => void onFiles(e)}
-      />
+      <input ref={fileRef} type="file" multiple hidden onChange={(e) => void onFiles(e)} />
 
       {menu && (
         <MessageMenu

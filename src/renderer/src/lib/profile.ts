@@ -61,29 +61,50 @@ export async function fileToMediaRef(file: File): Promise<MediaRef> {
   return { hash, type: file.type, dataUrl }
 }
 
-/** A picked image staged for sending: the upload ref + display metadata. */
+/** A picked file staged for sending. Holds the raw File for a streamed upload
+ *  (no base64 round-trip — large videos stay cheap), plus display metadata. */
 export interface PendingAttachment {
-  ref: MediaRef
+  file: File
+  hash: string // sha256 hex
   name: string
-  width: number
-  height: number
+  contentType: string
   size: number
+  width: number // images only, else 0
+  height: number
+  previewUrl?: string // object URL for the composer thumbnail (images only)
 }
 
-function imageSize(dataUrl: string): Promise<{ width: number; height: number }> {
+export const MAX_ATTACHMENT_BYTES = 100 << 20 // 100 MiB — matches the Keep
+
+function imageSize(url: string): Promise<{ width: number; height: number }> {
   return new Promise((resolve) => {
     const img = new Image()
     img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight })
     img.onerror = () => resolve({ width: 0, height: 0 })
-    img.src = dataUrl
+    img.src = url
   })
 }
 
-/** Read a picked image File into a PendingAttachment (validates type/size, reads dimensions). */
+/** Hash + stage any picked File (any type). Reads dimensions for images only. */
 export async function fileToPendingAttachment(file: File): Promise<PendingAttachment> {
-  const ref = await fileToMediaRef(file)
-  const { width, height } = await imageSize(ref.dataUrl)
-  return { ref, name: file.name, width, height, size: file.size }
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    throw new Error('File must be 100 MB or smaller.')
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as BufferSource))
+  const hash = [...digest].map((b) => b.toString(16).padStart(2, '0')).join('')
+  const contentType = file.type || 'application/octet-stream'
+
+  let width = 0
+  let height = 0
+  let previewUrl: string | undefined
+  if (contentType.startsWith('image/')) {
+    previewUrl = URL.createObjectURL(file)
+    const dims = await imageSize(previewUrl)
+    width = dims.width
+    height = dims.height
+  }
+  return { file, hash, name: file.name, contentType, size: file.size, width, height, previewUrl }
 }
 
 /** Convert a stored data URL back to raw bytes for upload to a Keep. */

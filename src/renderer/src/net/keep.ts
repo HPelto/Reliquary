@@ -52,6 +52,16 @@ export interface Attachment {
   size: number
 }
 
+export type AttachmentKind = 'image' | 'video' | 'audio' | 'file'
+
+export function attachmentKind(a: Attachment): AttachmentKind {
+  const t = a.content_type || ''
+  if (t.startsWith('image/')) return 'image'
+  if (t.startsWith('video/')) return 'video'
+  if (t.startsWith('audio/')) return 'audio'
+  return 'file'
+}
+
 export interface ReplyPreview {
   id: number
   author_id: number
@@ -276,9 +286,14 @@ export class KeepConnection {
 
   // ── profile & media ────────────────────────────────────────────────
 
-  /** Absolute URL for an <img> — public, immutable, content-addressed. */
+  /** Absolute URL for an <img>/<video>/<audio> — public, immutable, content-addressed. */
   mediaUrl(hash: string): string {
     return hash ? `${this.baseUrl}/v1/media/${hash}` : ''
+  }
+
+  /** Same bytes, but forces a download with the original filename. */
+  mediaDownloadUrl(hash: string, name: string): string {
+    return hash ? `${this.baseUrl}/v1/media/${hash}?download=${encodeURIComponent(name)}` : ''
   }
 
   async mediaExists(hash: string): Promise<boolean> {
@@ -450,13 +465,27 @@ export class KeepConnection {
     await this.request(`/v1/channels/${channelId}/messages/${id}`, { method: 'DELETE' })
   }
 
-  /** Ensure a picked image's bytes are on this Keep, then return its wire metadata. */
+  /** Ensure a picked file's bytes are on this Keep (streamed, any type), then
+   *  return its wire metadata. */
   async uploadAttachment(p: PendingAttachment): Promise<Attachment> {
-    if (!(await this.mediaExists(p.ref.hash))) await this.uploadMedia(p.ref)
+    if (!(await this.mediaExists(p.hash))) {
+      const res = await fetch(`${this.baseUrl}/v1/media/${p.hash}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': p.contentType,
+          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {})
+        },
+        body: p.file
+      })
+      if (!res.ok && res.status !== 409) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new KeepError(body.error ?? `upload failed (${res.status})`, res.status)
+      }
+    }
     return {
-      hash: p.ref.hash,
+      hash: p.hash,
       name: p.name,
-      content_type: p.ref.type,
+      content_type: p.contentType,
       width: p.width,
       height: p.height,
       size: p.size
