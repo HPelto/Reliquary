@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"reliquary.gg/keep/internal/api"
@@ -41,15 +42,23 @@ func main() {
 	}
 	defer st.Close()
 
-	// the host GUI can store a listen address; an explicit -addr flag wins
-	addrExplicit := false
+	// the host GUI can store a listen address + voice port; explicit flags win
+	addrExplicit, voiceExplicit := false, false
 	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "addr" {
+		switch f.Name {
+		case "addr":
 			addrExplicit = true
+		case "voice-port":
+			voiceExplicit = true
 		}
 	})
 	if stored, _ := st.GetSetting(api.SettingAddr); stored != "" && !addrExplicit {
 		*addr = stored
+	}
+	if stored, _ := st.GetSetting(api.SettingVoicePort); stored != "" && !voiceExplicit {
+		if p, perr := strconv.Atoi(stored); perr == nil && p > 0 && p <= 65535 {
+			*voicePort = p
+		}
 	}
 
 	// TLS is optional and off by default. Explicit -tls-cert/-tls-key flags win;

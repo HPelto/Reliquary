@@ -44,6 +44,12 @@ func (s *Server) handleHostState(w http.ResponseWriter, r *http.Request) {
 	tlsCert, _ := s.st.GetSetting(SettingTLSCertPath)
 	tlsKey, _ := s.st.GetSetting(SettingTLSKeyPath)
 	maxUploadMB := int(s.maxUploadBytes() >> 20)
+	voicePort := defaultVoicePort
+	if v, _ := s.st.GetSetting(SettingVoicePort); v != "" {
+		if p, err := strconv.Atoi(v); err == nil && p > 0 {
+			voicePort = p
+		}
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":              s.instanceName(),
@@ -52,6 +58,7 @@ func (s *Server) handleHostState(w http.ResponseWriter, r *http.Request) {
 		"users":             mout,
 		"keep_password_set": pwHash != "",
 		"addr":              addr,
+		"voice_port":        voicePort,
 		"channel_count":     len(channels),
 		"invite_count":      len(invites),
 		"online_count":      len(online),
@@ -61,6 +68,34 @@ func (s *Server) handleHostState(w http.ResponseWriter, r *http.Request) {
 		"tls_cert_path":     tlsCert,
 		"tls_key_path":      tlsKey,
 		"max_upload_mb":     maxUploadMB,
+	})
+}
+
+type voicePortReq struct {
+	Port int `json:"port"`
+}
+
+// handleHostVoicePort stores the SFU's UDP voice port; applies on restart. The
+// client learns the new port automatically from the server's ICE candidates, so
+// changing it doesn't break connected clients — but the owner must forward the
+// new UDP port for internet voice.
+func (s *Server) handleHostVoicePort(w http.ResponseWriter, r *http.Request) {
+	var req voicePortReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	if req.Port < 1 || req.Port > 65535 {
+		writeError(w, http.StatusBadRequest, "voice port must be between 1 and 65535")
+		return
+	}
+	if err := s.st.SetSetting(SettingVoicePort, strconv.Itoa(req.Port)); err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"voice_port": req.Port,
+		"note":       "forward this UDP port; takes effect on restart",
 	})
 }
 

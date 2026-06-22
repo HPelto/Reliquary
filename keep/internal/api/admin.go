@@ -36,6 +36,9 @@ const SettingTLSEnabled = "tls_enabled"
 const SettingTLSCertPath = "tls_cert_path"
 const SettingTLSKeyPath = "tls_key_path"
 const SettingMaxUploadMB = "max_upload_mb"
+const SettingVoicePort = "voice_port"
+
+const defaultVoicePort = 7011 // matches the -voice-port flag default
 
 func HashAdminKey(key string) string {
 	sum := sha256.Sum256([]byte(key))

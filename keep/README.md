@@ -48,6 +48,12 @@ Both are configurable — if you change them, forward the values you set:
 ./keep -addr :8443 -voice-port 9000
 ```
 
+You can also change them from the **Host Console** (Server config → listen port /
+voice port); they apply on the next restart. Changing the voice port doesn't
+break connected clients — the client learns the port from the server's WebRTC
+ICE candidates (sent over the main Keep connection), so it adjusts automatically.
+Just remember to forward the new UDP port for internet voice.
+
 > The `/admin` host console is on the same TCP port (`http://localhost:7777/admin`),
 > gated by the host key. Use it **locally**; don't expose it publicly without TLS.
 

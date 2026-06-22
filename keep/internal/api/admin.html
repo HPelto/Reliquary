@@ -138,6 +138,13 @@
       <span class="note" style="align-self:center;margin-top:0">takes effect on restart</span>
     </div>
     <div class="err" id="addrErr"></div>
+    <div class="bar" style="margin-top:10px">
+      <span style="align-self:center;font-size:13px;color:var(--hi)">Voice port (UDP)</span>
+      <input id="voicePortInput" class="mono" type="number" min="1" max="65535" placeholder="7011" style="max-width:110px">
+      <span class="note" style="align-self:center;margin-top:0">forward this UDP port · clients adjust automatically · takes effect on restart</span>
+      <button onclick="saveVoicePort()">Save</button>
+      <span class="err" id="voicePortErr" style="align-self:center;margin-top:0"></span>
+    </div>
     <div class="bar" style="margin-top:12px;border-top:1px solid var(--edge);padding-top:12px">
       <span style="align-self:center;font-size:13px;color:var(--hi)">Max upload size</span>
       <input id="uploadInput" class="mono" type="number" min="1" max="1024" placeholder="100" style="max-width:90px">
@@ -225,6 +232,7 @@ function renderState(st) {
   $('pwStatus').textContent = st.keep_password_set ? 'SET — joins require it' : 'not set'
   $('pwStatus').className = 'mono ' + (st.keep_password_set ? 'ok' : 'faint')
   if (document.activeElement !== $('addrInput')) $('addrInput').value = st.addr || ''
+  if (document.activeElement !== $('voicePortInput')) $('voicePortInput').value = st.voice_port || 7011
   $('tlsEnabled').checked = !!st.tls_enabled
   if (document.activeElement !== $('tlsCert')) $('tlsCert').value = st.tls_cert_path || ''
   if (document.activeElement !== $('tlsKey')) $('tlsKey').value = st.tls_key_path || ''
@@ -298,6 +306,14 @@ async function saveAddr() {
     await api('/v1/host/addr', { method: 'POST', body: JSON.stringify({ addr: $('addrInput').value }) })
     $('addrErr').textContent = ''
   } catch (e) { $('addrErr').textContent = e.message }
+}
+async function saveVoicePort() {
+  try {
+    const port = parseInt($('voicePortInput').value, 10)
+    const r = await api('/v1/host/voice-port', { method: 'POST', body: JSON.stringify({ port }) })
+    $('voicePortErr').style.color = 'var(--pulse)'
+    $('voicePortErr').textContent = 'Saved — udp/' + r.voice_port + ' (restart to apply)'
+  } catch (e) { $('voicePortErr').style.color = 'var(--ember)'; $('voicePortErr').textContent = e.message }
 }
 async function saveUploadLimit() {
   try {

@@ -553,6 +553,17 @@ func TestHostAndKeepPassword(t *testing.T) {
 		t.Fatalf("upload limit should now be 250, got %v", state["max_upload_mb"])
 	}
 
+	// voice port: defaults to 7011, validates range, applies to state
+	if state := hostDo("GET", "/v1/host/state", nil, "host-key", 200); state["voice_port"].(float64) != 7011 {
+		t.Fatalf("default voice port should be 7011, got %v", state["voice_port"])
+	}
+	hostDo("POST", "/v1/host/voice-port", map[string]int{"port": 0}, "host-key", 400)
+	hostDo("POST", "/v1/host/voice-port", map[string]int{"port": 70000}, "host-key", 400)
+	hostDo("POST", "/v1/host/voice-port", map[string]int{"port": 9000}, "host-key", 200)
+	if state := hostDo("GET", "/v1/host/state", nil, "host-key", 200); state["voice_port"].(float64) != 9000 {
+		t.Fatalf("voice port should now be 9000, got %v", state["voice_port"])
+	}
+
 	// restart is gated on a supervisor wiring SetRestart; unset → 501, and
 	// host state reflects availability
 	state := hostDo("GET", "/v1/host/state", nil, "host-key", 200)
