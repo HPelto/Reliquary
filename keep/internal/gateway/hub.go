@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -169,8 +170,47 @@ func (h *Hub) OnlineUserIDs() map[int64]bool {
 	return out
 }
 
+// originAllowed authorizes the WebSocket upgrade's Origin. Browsers always send
+// an Origin header they control, so we permit only origins that belong to our
+// own client and reject any other web page (defense against cross-site
+// WebSocket hijacking). Non-browser clients send no Origin and still have to
+// pass token auth, so they're let through here.
+//
+// Note: the production Electron renderer loads from file://, whose Origin is the
+// literal "null". That value is also producible by sandboxed iframes, so this is
+// defense-in-depth layered on top of the per-connection token — not a sole gate.
+func originAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	switch origin {
+	case "":
+		return true // non-browser client (no Origin header)
+	case "null":
+		return true // Electron renderer from a file:// page (packaged build)
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	if u.Host == r.Host {
+		return true // same-origin (e.g. the Keep's own /admin pages)
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return true // Electron dev server
+	}
+	return false
+}
+
 // ServeHTTP upgrades GET /v1/gateway?token=… into a gateway connection.
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// CSWSH guard: reject cross-site WebSocket upgrades from arbitrary web pages
+	// before doing any work. A browser always sets Origin itself, so this stops a
+	// malicious page from driving a reachable Keep's gateway.
+	if !originAllowed(r) {
+		http.Error(w, `{"error":"forbidden origin"}`, http.StatusForbidden)
+		return
+	}
+
 	user, err := h.st.UserByToken(r.URL.Query().Get("token"))
 	if err != nil {
 		http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
@@ -178,7 +218,9 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		// The Electron client connects from a file:// / app:// origin.
+		// Origin is validated above by originAllowed(). We skip the library's
+		// built-in same-origin check because the Electron client connects from a
+		// file:// page, whose Origin is "null" — which that check would reject.
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
