@@ -29,7 +29,7 @@ const git = (cmd) => {
 git('git fetch --tags --quiet')
 
 function bodyFor(tag, version) {
-  const prev = git(`git describe --tags --abbrev=0 ${tag}^`)
+  const prev = git(`git describe --tags --abbrev=0 ${tag}~1`)
   const range = prev ? `${prev}..${tag}` : `${tag} -n 25`
   const subjects = git(`git log ${range} --no-merges --pretty=format:%s`)
     .split('\n')
