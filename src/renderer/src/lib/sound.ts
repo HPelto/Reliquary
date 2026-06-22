@@ -6,6 +6,7 @@
 
 import joinSfx from '@audio/KeepVoiceJoin.wav'
 import leaveSfx from '@audio/KeepVoiceLeave.wav'
+import chatSfx from '@audio/ChatNotification.wav'
 
 function play(src: string, volume: number): void {
   try {
@@ -25,4 +26,9 @@ export function playVoiceJoin(): void {
 /** Someone left a voice channel you're in (or you just left). */
 export function playVoiceLeave(): void {
   play(leaveSfx, 0.5)
+}
+
+/** A new chat message arrived (gated by notification prefs in the caller). */
+export function playChatNotification(): void {
+  play(chatSfx, 0.5)
 }

@@ -4,12 +4,32 @@
  * enter the store; the registry here owns them per instance.
  */
 
-import { KeepConnection, type KeepUser } from './keep'
+import { KeepConnection, type KeepMessage, type KeepUser } from './keep'
 import { routeVoiceFrame } from './voice'
+import { resolved } from '@/lib/notifications'
+import { playChatNotification } from '@/lib/sound'
 import { updateWorld } from '@/lib/worlds'
 import { useUi } from '@/store'
 
 const registry = new Map<string, KeepConnection>()
+
+// brief guard so a burst of messages doesn't stack the sound on itself
+let lastNotifyAt = 0
+
+/** Play the chat sound for an incoming message, honoring this Keep's notification
+ *  level. Skips your own messages and the channel you're actively looking at. */
+function notifyMessage(instanceId: string, serverId: string, msg: KeepMessage, selfId?: number): void {
+  if (selfId && msg.author.id === selfId) return // my own message echoed back
+  // 'all' plays; 'mentions' and 'nothing' stay quiet (no @mention system yet)
+  if (resolved(instanceId, String(msg.channel_id)) !== 'all') return
+  const ui = useUi.getState()
+  const looking = ui.activeServerId === serverId && ui.activeChannelId === String(msg.channel_id)
+  if (looking && document.hasFocus()) return // you can already see it
+  const now = Date.now()
+  if (now - lastNotifyAt < 400) return
+  lastNotifyAt = now
+  playChatNotification()
+}
 
 export function getKeep(instanceId: string): KeepConnection | undefined {
   return registry.get(instanceId)
@@ -51,7 +71,10 @@ export function createKeep(
       useUi.getState().renameServer(serverId, world.name)
       updateWorld(instanceId, { name: world.name })
     },
-    onMessage: (msg) => useUi.getState().appendKeepMessage(instanceId, msg),
+    onMessage: (msg) => {
+      useUi.getState().appendKeepMessage(instanceId, msg)
+      notifyMessage(instanceId, serverId, msg, conn.self?.id)
+    },
     onMessageUpdate: (msg) => useUi.getState().updateMessage(instanceId, msg),
     onMessageDelete: (channelId, id) => useUi.getState().removeMessage(instanceId, channelId, id),
     onPresence: (userId, online, state) => {
