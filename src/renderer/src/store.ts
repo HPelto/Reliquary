@@ -114,6 +114,7 @@ interface UiState {
   setKeep: (instanceId: string, partial: Partial<KeepState>) => void
   appendKeepMessage: (instanceId: string, msg: KeepMessage) => void
   setKeepMessages: (instanceId: string, channelId: number, msgs: KeepMessage[]) => void
+  prependKeepMessages: (instanceId: string, channelId: number, older: KeepMessage[]) => void
   updateMessage: (instanceId: string, msg: KeepMessage) => void
   removeMessage: (instanceId: string, channelId: number, id: number) => void
   renameServer: (serverId: string, name: string) => void
@@ -253,6 +254,23 @@ export const useUi = create<UiState>((set) => ({
         connections: {
           ...s.connections,
           [instanceId]: { ...keep, messages: { ...keep.messages, [channelId]: msgs } }
+        }
+      }
+    }),
+  prependKeepMessages: (instanceId, channelId, older) =>
+    set((s) => {
+      const keep = s.connections[instanceId] ?? emptyKeep
+      const existing = keep.messages[channelId] ?? []
+      const have = new Set(existing.map((m) => m.id))
+      const fresh = older.filter((m) => !have.has(m.id))
+      if (fresh.length === 0) return {}
+      return {
+        connections: {
+          ...s.connections,
+          [instanceId]: {
+            ...keep,
+            messages: { ...keep.messages, [channelId]: [...fresh, ...existing] }
+          }
         }
       }
     }),

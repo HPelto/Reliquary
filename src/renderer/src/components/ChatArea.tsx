@@ -190,7 +190,8 @@ function MessageRow({
 }
 
 export function ChatArea(): React.JSX.Element | null {
-  const { activeServerId, activeChannelId, toggleMembers, connections, setKeepMessages } = useUi()
+  const { activeServerId, activeChannelId, toggleMembers, connections, setKeepMessages, prependKeepMessages } =
+    useUi()
   const { servers, instances } = useWorld()
   const [draft, setDraft] = useState('')
   const [menu, setMenu] = useState<MenuTarget | null>(null)
@@ -205,6 +206,7 @@ export function ChatArea(): React.JSX.Element | null {
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const pinBtnRef = useRef<HTMLButtonElement>(null)
+  const jumpingRef = useRef(false)
 
   const server = servers.find((s) => s.id === activeServerId)
   const instance = server ? instances.find((i) => i.id === server.instanceId) : undefined
@@ -224,8 +226,10 @@ export function ChatArea(): React.JSX.Element | null {
       .catch(() => {})
   }, [server, channel, msgs, setKeepMessages])
 
-  // keep the view pinned to the newest message
+  // keep the view pinned to the newest message — but not while we're jumping to
+  // an older one (paging in history changes the length and would yank us back).
   useEffect(() => {
+    if (jumpingRef.current) return
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [msgs?.length, activeChannelId])
@@ -280,7 +284,7 @@ export function ChatArea(): React.JSX.Element | null {
   }
 
   // scroll a message into view and flash it (from a reply preview or a pin)
-  const jumpTo = (id: number): void => {
+  const flashMessage = (id: number): void => {
     const el = document.getElementById(`msg-${id}`)
     if (!el) return
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -289,6 +293,40 @@ export function ChatArea(): React.JSX.Element | null {
       setHighlightId(id)
       window.setTimeout(() => setHighlightId((h) => (h === id ? null : h)), 1800)
     })
+  }
+
+  // Jump to any message — even one far back in history. If it isn't loaded yet,
+  // page backwards (oldest-first) until it's in the list, then scroll to it.
+  const jumpTo = async (id: number): Promise<void> => {
+    if (!channel) return
+    if (document.getElementById(`msg-${id}`)) {
+      flashMessage(id)
+      return
+    }
+    const conn = getKeep(server.instanceId)
+    if (!conn) return
+    jumpingRef.current = true
+    try {
+      for (let i = 0; i < 200; i++) {
+        const loaded =
+          useUi.getState().connections[server.instanceId]?.messages[channel.id] ?? []
+        if (loaded.some((m) => m.id === id)) break
+        const oldest = loaded[0]?.id
+        // oldest <= id with the target absent ⇒ it was deleted; stop paging
+        if (oldest === undefined || oldest <= id) break
+        const older = await conn.loadMessages(channel.id, oldest)
+        if (older.length === 0) break
+        prependKeepMessages(server.instanceId, channel.id, older)
+      }
+      // let React paint the prepended rows before we scroll to the target
+      await new Promise<void>((r) => requestAnimationFrame(() => r()))
+      await new Promise<void>((r) => requestAnimationFrame(() => r()))
+      flashMessage(id)
+    } finally {
+      window.setTimeout(() => {
+        jumpingRef.current = false
+      }, 500)
+    }
   }
 
   return (
@@ -371,7 +409,7 @@ export function ChatArea(): React.JSX.Element | null {
                     onEditSubmit={submitEdit}
                     onEditCancel={() => setEditingId(null)}
                     onOpenLightbox={(items, index) => setLightbox({ items, index })}
-                    onJump={jumpTo}
+                    onJump={(jid) => void jumpTo(jid)}
                     grouped={
                       i > 0 &&
                       msgs[i - 1].author.id === m.author.id &&
@@ -522,7 +560,7 @@ export function ChatArea(): React.JSX.Element | null {
             const r = pinBtnRef.current?.getBoundingClientRect()
             return { right: r ? window.innerWidth - r.right : 16, top: r ? r.bottom + 8 : 52 }
           })()}
-          onJump={jumpTo}
+          onJump={(jid) => void jumpTo(jid)}
           onClose={() => setPinsOpen(false)}
         />
       )}
