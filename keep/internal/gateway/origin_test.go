@@ -14,6 +14,8 @@ func TestOriginAllowed(t *testing.T) {
 	}{
 		{"non-browser client (no origin)", "", true},
 		{"electron packaged (file:// → null)", "null", true},
+		{"electron packaged (file:// origin)", "file://", true},
+		{"electron packaged (file:/// path)", "file:///C:/app/index.html", true},
 		{"electron dev (localhost)", "http://localhost:5173", true},
 		{"electron dev (127.0.0.1)", "http://127.0.0.1:5173", true},
 		{"same-origin admin page", "http://keep.example:7777", true},
