@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"time"
 
@@ -26,7 +27,35 @@ import (
 const restartExitCode = 42
 const updateExitCode = 43
 
+// superviseSelf re-runs the actual server as a child process and restarts it on
+// exit 42, so the Host Console's Restart button works even when keep.exe is run
+// directly (double-clicked) without start-keep.cmd. A standalone binary has no
+// source to git-pull, so the child runs in "portable" mode (no Update button).
+func superviseSelf() {
+	exe, err := os.Executable()
+	if err != nil {
+		exe = os.Args[0]
+	}
+	for {
+		cmd := exec.Command(exe, os.Args[1:]...)
+		cmd.Env = append(os.Environ(), "KEEP_SUPERVISED=1", "KEEP_PORTABLE=1")
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		runErr := cmd.Run()
+		if cmd.ProcessState == nil {
+			log.Fatalf("could not start keep: %v", runErr)
+		}
+		if code := cmd.ProcessState.ExitCode(); code != restartExitCode {
+			os.Exit(code)
+		}
+		log.Printf("restarting…")
+	}
+}
+
 func main() {
+	// Launched directly (not by a supervisor)? Become one, so Restart works.
+	if os.Getenv("KEEP_SUPERVISED") != "1" {
+		superviseSelf()
+	}
 	addr := flag.String("addr", ":7777", "listen address")
 	data := flag.String("data", "keep.db", "path to the SQLite database file")
 	name := flag.String("name", "Reliquary Keep", "instance display name")

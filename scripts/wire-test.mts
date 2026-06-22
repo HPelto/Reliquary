@@ -35,11 +35,12 @@ async function until(label: string, fn: () => boolean, timeoutMs = 8000): Promis
 // ── boot the keep ───────────────────────────────────────────────────
 const exeName = process.env.KEEP_EXE ?? 'keep.exe'
 const dataDir = mkdtempSync(join(tmpdir(), 'keep-wire-'))
-const keep = spawn(join(import.meta.dirname, '..', 'keep', exeName), [
-  '-addr', `:${PORT}`,
-  '-data', join(dataDir, 'keep.db'),
-  '-name', 'Wire Test Keep'
-])
+const keep = spawn(
+  join(import.meta.dirname, '..', 'keep', exeName),
+  ['-addr', `:${PORT}`, '-data', join(dataDir, 'keep.db'), '-name', 'Wire Test Keep'],
+  // run the server in-process (not the self-supervisor) so we can manage it
+  { env: { ...process.env, KEEP_SUPERVISED: '1' } }
+)
 let keepLog = ''
 keep.stderr.on('data', (d: Buffer) => (keepLog += d.toString()))
 keep.stdout.on('data', (d: Buffer) => (keepLog += d.toString()))
