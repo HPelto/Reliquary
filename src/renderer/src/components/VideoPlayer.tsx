@@ -83,7 +83,7 @@ export function VideoPlayer({
   const seekTo = (clientX: number): void => {
     const bar = barRef.current
     const v = vRef.current
-    if (!bar || !v || !dur) return
+    if (!bar || !v || !dur || !isFinite(dur)) return
     const r = bar.getBoundingClientRect()
     const pct = Math.min(1, Math.max(0, (clientX - r.left) / r.width))
     v.currentTime = pct * dur
@@ -127,7 +127,7 @@ export function VideoPlayer({
     setMuted(nv === 0)
   }
 
-  const pct = dur ? (cur / dur) * 100 : 0
+  const pct = dur && isFinite(dur) ? Math.min(100, (cur / dur) * 100) : 0
   const showControls = started && (hover || !playing || fs)
 
   // Initial position via a media fragment (#t=) so the browser starts there and
@@ -180,6 +180,8 @@ export function VideoPlayer({
           setDur(v.duration)
           setCur(v.currentTime) // already at the #t= position
         }}
+        onDurationChange={(e) => setDur(e.currentTarget.duration)}
+        onProgress={(e) => setDur(e.currentTarget.duration)}
         onVolumeChange={(e) => {
           setMuted(e.currentTarget.muted)
           setVol(e.currentTarget.volume)
