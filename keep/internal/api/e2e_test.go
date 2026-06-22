@@ -542,6 +542,17 @@ func TestHostAndKeepPassword(t *testing.T) {
 		t.Fatalf("tls_enabled should be false, got %v", state["tls_enabled"])
 	}
 
+	// upload limit: defaults to 100 MB, validates range, and applies to state
+	if state := hostDo("GET", "/v1/host/state", nil, "host-key", 200); state["max_upload_mb"].(float64) != 100 {
+		t.Fatalf("default upload limit should be 100, got %v", state["max_upload_mb"])
+	}
+	hostDo("POST", "/v1/host/upload-limit", map[string]int{"mb": 0}, "host-key", 400)
+	hostDo("POST", "/v1/host/upload-limit", map[string]int{"mb": 99999}, "host-key", 400)
+	hostDo("POST", "/v1/host/upload-limit", map[string]int{"mb": 250}, "host-key", 200)
+	if state := hostDo("GET", "/v1/host/state", nil, "host-key", 200); state["max_upload_mb"].(float64) != 250 {
+		t.Fatalf("upload limit should now be 250, got %v", state["max_upload_mb"])
+	}
+
 	// restart is gated on a supervisor wiring SetRestart; unset → 501, and
 	// host state reflects availability
 	state := hostDo("GET", "/v1/host/state", nil, "host-key", 200)

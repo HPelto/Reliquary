@@ -106,6 +106,7 @@ export interface KeepWorld {
   events?: KeepEvent[]
   lock_name_style?: boolean
   require_invite?: boolean
+  max_upload_mb?: number
 }
 
 export interface KeepDiscovery {

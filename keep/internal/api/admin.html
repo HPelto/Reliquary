@@ -138,6 +138,13 @@
       <span class="note" style="align-self:center;margin-top:0">takes effect on restart</span>
     </div>
     <div class="err" id="addrErr"></div>
+    <div class="bar" style="margin-top:12px;border-top:1px solid var(--edge);padding-top:12px">
+      <span style="align-self:center;font-size:13px;color:var(--hi)">Max upload size</span>
+      <input id="uploadInput" class="mono" type="number" min="1" max="1024" placeholder="100" style="max-width:90px">
+      <span class="note" style="align-self:center;margin-top:0">MB — your storage, your call · applies immediately</span>
+      <button onclick="saveUploadLimit()">Save</button>
+      <span class="err" id="uploadErr" style="align-self:center;margin-top:0"></span>
+    </div>
     <div id="restartRow" class="hidden" style="margin-top:14px;border-top:1px solid var(--edge);padding-top:14px;display:flex;align-items:center;gap:12px">
       <div style="flex:1">
         <div style="font-size:13.5px;font-weight:500;color:var(--hi)">Restart server</div>
@@ -221,6 +228,7 @@ function renderState(st) {
   $('tlsEnabled').checked = !!st.tls_enabled
   if (document.activeElement !== $('tlsCert')) $('tlsCert').value = st.tls_cert_path || ''
   if (document.activeElement !== $('tlsKey')) $('tlsKey').value = st.tls_key_path || ''
+  if (document.activeElement !== $('uploadInput')) $('uploadInput').value = st.max_upload_mb || 100
   $('restartRow').classList.toggle('hidden', !st.restart_available)
   $('updateBtn').style.display = st.update_available ? '' : 'none'
   $('checkBtn').style.display = st.update_available ? '' : 'none'
@@ -290,6 +298,14 @@ async function saveAddr() {
     await api('/v1/host/addr', { method: 'POST', body: JSON.stringify({ addr: $('addrInput').value }) })
     $('addrErr').textContent = ''
   } catch (e) { $('addrErr').textContent = e.message }
+}
+async function saveUploadLimit() {
+  try {
+    const mb = parseInt($('uploadInput').value, 10)
+    const r = await api('/v1/host/upload-limit', { method: 'POST', body: JSON.stringify({ mb }) })
+    $('uploadErr').style.color = 'var(--pulse)'
+    $('uploadErr').textContent = 'Saved — ' + r.max_upload_mb + ' MB'
+  } catch (e) { $('uploadErr').style.color = 'var(--ember)'; $('uploadErr').textContent = e.message }
 }
 async function saveTLS() {
   try {

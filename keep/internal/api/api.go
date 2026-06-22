@@ -134,6 +134,7 @@ func New(st *store.Store, hub *gateway.Hub, cfg Config) *Server {
 				r.Delete("/users/{id}", s.handleHostDeleteUser)
 				r.Post("/addr", s.handleHostAddr)
 				r.Post("/tls", s.handleHostTLS)
+				r.Post("/upload-limit", s.handleHostUploadLimit)
 				r.Post("/rescue-invite", s.handleHostRescueInvite)
 				r.Post("/restart", s.handleHostRestart)
 				r.Post("/update-restart", s.handleHostUpdateRestart)
@@ -236,6 +237,7 @@ func (s *Server) handleWorld(w http.ResponseWriter, r *http.Request) {
 		"events":          events,
 		"lock_name_style": s.nameStyleLocked(),
 		"require_invite":  s.inviteRequired(),
+		"max_upload_mb":   int(s.maxUploadBytes() >> 20),
 	})
 }
 

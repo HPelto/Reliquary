@@ -43,6 +43,7 @@ func (s *Server) handleHostState(w http.ResponseWriter, r *http.Request) {
 	tlsEnabled, _ := s.st.GetSetting(SettingTLSEnabled)
 	tlsCert, _ := s.st.GetSetting(SettingTLSCertPath)
 	tlsKey, _ := s.st.GetSetting(SettingTLSKeyPath)
+	maxUploadMB := int(s.maxUploadBytes() >> 20)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":              s.instanceName(),
@@ -59,7 +60,31 @@ func (s *Server) handleHostState(w http.ResponseWriter, r *http.Request) {
 		"tls_enabled":       tlsEnabled == "1",
 		"tls_cert_path":     tlsCert,
 		"tls_key_path":      tlsKey,
+		"max_upload_mb":     maxUploadMB,
 	})
+}
+
+type uploadLimitReq struct {
+	MB int `json:"mb"`
+}
+
+// handleHostUploadLimit sets the per-file upload cap (MB). Applies immediately —
+// it's read on every upload, no restart needed.
+func (s *Server) handleHostUploadLimit(w http.ResponseWriter, r *http.Request) {
+	var req uploadLimitReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	if req.MB < 1 || req.MB > maxUploadCeilingMB {
+		writeError(w, http.StatusBadRequest, "limit must be between 1 and 1024 MB")
+		return
+	}
+	if err := s.st.SetSetting(SettingMaxUploadMB, strconv.Itoa(req.MB)); err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"max_upload_mb": req.MB})
 }
 
 type tlsReq struct {

@@ -201,6 +201,7 @@ export function ChatArea(): React.JSX.Element | null {
   const [pending, setPending] = useState<PendingAttachment[]>([])
   const [uploadOpen, setUploadOpen] = useState(false)
   const [sending, setSending] = useState(false)
+  const [attachError, setAttachError] = useState<string | null>(null)
   const [replyingTo, setReplyingTo] = useState<KeepMessage | null>(null)
   const [pinsOpen, setPinsOpen] = useState(false)
   const [highlightId, setHighlightId] = useState<number | null>(null)
@@ -263,13 +264,24 @@ export function ChatArea(): React.JSX.Element | null {
   const onFiles = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
     const files = Array.from(e.target.files ?? [])
     e.target.value = ''
+    const limitMb = keep?.world?.max_upload_mb ?? 100
+    const limitBytes = limitMb * 1024 * 1024
     const added: PendingAttachment[] = []
+    const rejected: string[] = []
     for (const f of files) {
+      if (f.size > limitBytes) {
+        rejected.push(f.name)
+        continue
+      }
       try {
         added.push(await fileToPendingAttachment(f))
       } catch {
-        /* skip non-image / too-large files */
+        rejected.push(f.name)
       }
+    }
+    if (rejected.length > 0) {
+      setAttachError(`Over this Keep's ${limitMb} MB limit: ${rejected.join(', ')}`)
+      window.setTimeout(() => setAttachError(null), 6000)
     }
     setPending((p) => [...p, ...added].slice(0, 10))
   }
@@ -436,6 +448,11 @@ export function ChatArea(): React.JSX.Element | null {
       {/* composer */}
       <div className="shrink-0 px-4 pb-4">
         <div className="mx-auto max-w-[860px]">
+          {attachError && (
+            <div className="mb-2 rounded-lg border border-ember/40 bg-ember/10 px-3 py-1.5 text-[12px] text-ember">
+              {attachError}
+            </div>
+          )}
           {replyingTo && (
             <div className="mb-2 flex items-center gap-2 rounded-xl border border-edge bg-void-2 px-3 py-1.5 text-[12px] text-mid">
               <ReplyIcon size={13} className="text-[var(--accent)]" />

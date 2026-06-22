@@ -13,6 +13,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,7 +22,20 @@ import (
 	"reliquary.gg/keep/internal/store"
 )
 
-const maxMediaBytes = 100 << 20 // 100 MiB — covers images, audio, and short video
+const defaultMaxUploadMB = 100 // used when the owner hasn't set a limit
+const maxUploadCeilingMB = 1024 // hard upper bound the console will accept
+
+// maxUploadBytes is the owner-configured upload cap (Host Console), in bytes.
+// Read per-upload so changes apply immediately without a restart.
+func (s *Server) maxUploadBytes() int64 {
+	mb := defaultMaxUploadMB
+	if v, _ := s.st.GetSetting(SettingMaxUploadMB); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			mb = n
+		}
+	}
+	return int64(mb) << 20
+}
 
 // sanitizeFilename strips anything that could break a Content-Disposition header
 // or escape a directory, leaving a safe suggested download name.
@@ -84,9 +98,11 @@ func (s *Server) handleUploadMedia(w http.ResponseWriter, r *http.Request) {
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxMediaBytes))
+	limit := s.maxUploadBytes()
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
-		writeError(w, http.StatusRequestEntityTooLarge, "file exceeds the 100 MB limit")
+		writeError(w, http.StatusRequestEntityTooLarge,
+			"file is over this Keep's upload limit of "+strconv.FormatInt(limit>>20, 10)+" MB")
 		return
 	}
 	sum := sha256.Sum256(data)
