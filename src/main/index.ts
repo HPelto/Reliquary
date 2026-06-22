@@ -116,7 +116,14 @@ function createWindow(): void {
   win.once('ready-to-show', () => win.show())
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    // Never hand an arbitrary scheme to the OS shell — a crafted link could try
+    // file:, smb:, or a custom protocol handler. Only real web links open out.
+    try {
+      const { protocol } = new URL(url)
+      if (protocol === 'https:' || protocol === 'http:') void shell.openExternal(url)
+    } catch {
+      /* malformed URL — ignore */
+    }
     return { action: 'deny' }
   })
 
@@ -138,10 +145,24 @@ function createWindow(): void {
 app.whenReady().then(() => {
   nativeTheme.themeSource = 'dark'
 
-  // Grant microphone (and other) access for our own trusted renderer — without
-  // this Electron denies getUserMedia, so voice fails before it even signals.
-  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(true))
-  session.defaultSession.setPermissionCheckHandler(() => true)
+  // Permissions: deny-by-default, allow only what the app actually uses. Both
+  // handlers share one allowlist so navigator.permissions.query() (the check
+  // handler) can never disagree with an actual request. Anything not listed —
+  // geolocation, USB/HID/serial, screen capture, etc. — is refused, so a future
+  // bug or compromised dependency can't silently reach hardware it shouldn't.
+  const ALLOWED_PERMISSIONS = new Set<string>([
+    'media', // microphone for voice (covers camera too, if video ever lands)
+    'speaker-selection', // output-device picker (HTMLAudioElement.setSinkId)
+    'clipboard-sanitized-write' // Copy User ID / invite link / recovery key
+    // 'notifications'   // ← uncomment when notification delivery ships
+    // 'display-capture' // ← uncomment when screen share ships (also wire setDisplayMediaRequestHandler)
+  ])
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
+    callback(ALLOWED_PERMISSIONS.has(permission))
+  )
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) =>
+    ALLOWED_PERMISSIONS.has(permission)
+  )
 
   const storage = new FileStorage()
   // sync get: the renderer needs identity state before first paint
