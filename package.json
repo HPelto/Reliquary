@@ -1,6 +1,6 @@
 {
   "name": "reliquary",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Reliquary — your worlds, your servers, your relic. A gaming-first, self-hostable communication client.",
   "main": "./out/main/index.js",
   "author": "Reliquary",
