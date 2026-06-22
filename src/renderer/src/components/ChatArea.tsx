@@ -408,7 +408,7 @@ export function ChatArea(): React.JSX.Element | null {
 
       {/* messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-4 scroll-thin">
-        <div className="mx-auto flex max-w-[860px] flex-col">
+        <div className="flex flex-col">
           {!channel ? (
             <p className="px-3 text-[13px] text-lo">Pick a channel on the left.</p>
           ) : (
@@ -471,7 +471,7 @@ export function ChatArea(): React.JSX.Element | null {
 
       {/* composer */}
       <div className="shrink-0 px-4 pb-4">
-        <div className="mx-auto max-w-[860px]">
+        <div>
           {uploadProgress !== null && (
             <div className="mb-2 flex items-center gap-2.5 rounded-lg border border-edge bg-void-2 px-3 py-2">
               <Loader2 size={14} className="shrink-0 animate-spin text-[var(--accent)]" />
