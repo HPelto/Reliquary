@@ -8,6 +8,10 @@ function fmt(s: number): string {
   return `${m}:${sec.toString().padStart(2, '0')}`
 }
 
+// Remembered playback position per source so the timeline persists across view
+// modes (inline ↔ preview) and re-opens. Cleared naturally when the app reloads.
+const playbackPos = new Map<string, number>()
+
 /** Themed, fully custom video player (no native chrome).
  *  - Paused: a center play button; clicking it plays inline. Clicking the
  *    surface elsewhere calls onExpand (open large preview) when provided,
@@ -96,8 +100,13 @@ export function VideoPlayer({
   }
   const toggleFs = (e: React.MouseEvent): void => {
     e.stopPropagation()
-    if (document.fullscreenElement) void document.exitFullscreen()
-    else void boxRef.current?.requestFullscreen().catch(() => {})
+    if (document.fullscreenElement) {
+      void document.exitFullscreen()
+    } else {
+      boxRef.current
+        ?.requestFullscreen()
+        .catch((err) => console.error('[video] fullscreen request failed:', err))
+    }
   }
   const toggleMute = (e: React.MouseEvent): void => {
     e.stopPropagation()
@@ -148,14 +157,20 @@ export function VideoPlayer({
           setStarted(true)
         }}
         onPause={() => setPlaying(false)}
-        onTimeUpdate={(e) => setCur(e.currentTarget.currentTime)}
+        onTimeUpdate={(e) => {
+          const t = e.currentTarget.currentTime
+          setCur(t)
+          playbackPos.set(src, t)
+        }}
         onLoadedMetadata={(e) => {
           const v = e.currentTarget
           setDur(v.duration)
-          // seek to the handed-off position first, then resume — no flash of 0
-          if (startAt && startAt > 0) {
-            v.currentTime = startAt
-            setCur(startAt)
+          // resume from the handed-off position, else the last remembered spot —
+          // then play. Seeking before play avoids a flash of frame 0.
+          const resume = startAt && startAt > 0 ? startAt : (playbackPos.get(src) ?? 0)
+          if (resume > 0 && resume < v.duration) {
+            v.currentTime = resume
+            setCur(resume)
           }
           if (autoPlay) void v.play().catch(() => {})
         }}
@@ -166,19 +181,25 @@ export function VideoPlayer({
         className={videoClass}
       />
 
-      {/* center play button (paused). Clicking the circle plays; clicking the
-          surface around it opens the large preview (or toggles in lightbox). */}
-      {!playing && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center" onClick={onSurface}>
+      {/* center play/pause button. Shown when paused, or on hover while playing
+          (so pausing in the small inline view is an easy big target). Clicking
+          the circle toggles play; clicking the surface around it opens the large
+          preview (inline) or toggles play (lightbox). */}
+      {(!playing || hover) && (
+        <div className="absolute inset-0 z-[5] flex items-center justify-center" onClick={onSurface}>
           <button
             onClick={(e) => {
               e.stopPropagation()
               togglePlay()
             }}
-            className="flex h-16 w-16 items-center justify-center rounded-full bg-void-0/60 backdrop-blur transition hover:bg-void-0/80"
-            title="Play"
+            className="flex h-16 w-16 items-center justify-center rounded-full bg-void-0/55 text-hi backdrop-blur transition hover:bg-void-0/80"
+            title={playing ? 'Pause' : 'Play'}
           >
-            <Play size={30} className="ml-1 text-hi" fill="currentColor" />
+            {playing ? (
+              <Pause size={28} fill="currentColor" />
+            ) : (
+              <Play size={30} className="ml-1" fill="currentColor" />
+            )}
           </button>
         </div>
       )}
