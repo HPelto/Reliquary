@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { Instance, Server } from '@/data/mock'
 import { loadIdentity, saveIdentity, type Identity } from '@/lib/identity'
 import { loadProfile, saveProfile, type Profile } from '@/lib/profile'
+import { loadBlocks, saveBlocks, type BlockedUser } from '@/lib/blocks'
 import type { KeepMessage, KeepStatus, KeepUser, KeepWorld } from '@/net/keep'
 import {
   startVoice,
@@ -101,6 +102,13 @@ interface UiState {
   /** open a member's profile card by keep user id (null = closed) */
   viewedUserId: number | null
   viewUser: (id: number | null) => void
+  /** silenced + blocked users, keyed by pubkey (global, persisted) */
+  blocked: Record<string, BlockedUser>
+  silenced: Record<string, BlockedUser>
+  blockUser: (u: BlockedUser) => void
+  unblockUser: (pubkey: string) => void
+  silenceUser: (u: BlockedUser) => void
+  unsilenceUser: (pubkey: string) => void
   extraInstances: Instance[]
   extraServers: Server[]
   identity: Identity | null
@@ -208,6 +216,34 @@ export const useUi = create<UiState>((set) => ({
   },
   viewedUserId: null,
   viewUser: (id) => set({ viewedUserId: id }),
+  blocked: loadBlocks().blocked,
+  silenced: loadBlocks().silenced,
+  blockUser: (u) =>
+    set((s) => {
+      const blocked = { ...s.blocked, [u.pubkey]: u }
+      saveBlocks({ blocked, silenced: s.silenced })
+      return { blocked }
+    }),
+  unblockUser: (pubkey) =>
+    set((s) => {
+      const blocked = { ...s.blocked }
+      delete blocked[pubkey]
+      saveBlocks({ blocked, silenced: s.silenced })
+      return { blocked }
+    }),
+  silenceUser: (u) =>
+    set((s) => {
+      const silenced = { ...s.silenced, [u.pubkey]: u }
+      saveBlocks({ blocked: s.blocked, silenced })
+      return { silenced }
+    }),
+  unsilenceUser: (pubkey) =>
+    set((s) => {
+      const silenced = { ...s.silenced }
+      delete silenced[pubkey]
+      saveBlocks({ blocked: s.blocked, silenced })
+      return { silenced }
+    }),
   extraInstances: [],
   extraServers: [],
   identity: loadIdentity(),

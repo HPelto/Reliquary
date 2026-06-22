@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  Ban,
   BarChart2,
   Bell,
   CornerUpRight,
@@ -53,6 +54,8 @@ function MessageRow({
   locked,
   editing,
   highlighted,
+  blockedHidden,
+  onReveal,
   onContextMenu,
   onEditSubmit,
   onEditCancel,
@@ -65,6 +68,8 @@ function MessageRow({
   locked: boolean
   editing: boolean
   highlighted: boolean
+  blockedHidden: boolean
+  onReveal: () => void
   onContextMenu: (e: React.MouseEvent, msg: KeepMessage) => void
   onEditSubmit: (msg: KeepMessage, content: string) => void
   onEditCancel: () => void
@@ -77,6 +82,28 @@ function MessageRow({
   useEffect(() => {
     if (editing) setEdit(msg.content)
   }, [editing, msg.content])
+
+  // a blocked user's message stays veiled until "Show message" is clicked
+  if (blockedHidden) {
+    return (
+      <div
+        id={`msg-${msg.id}`}
+        onContextMenu={(e) => onContextMenu(e, msg)}
+        className="msg-in group relative mt-0.5 rounded-lg px-3 py-1 transition-colors duration-100 hover:bg-void-2/40"
+      >
+        <div className="flex items-center gap-2 text-[12.5px] text-lo">
+          <Ban size={13} className="shrink-0 opacity-70" />
+          <span className="italic">Blocked user</span>
+          <button
+            onClick={onReveal}
+            className="ml-1 text-[12px] text-[var(--accent)] transition-colors hover:underline"
+          >
+            Show message
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -193,8 +220,21 @@ function MessageRow({
 }
 
 export function ChatArea(): React.JSX.Element | null {
-  const { activeServerId, activeChannelId, toggleMembers, connections, setKeepMessages, prependKeepMessages } =
-    useUi()
+  const {
+    activeServerId,
+    activeChannelId,
+    toggleMembers,
+    connections,
+    setKeepMessages,
+    prependKeepMessages,
+    blocked,
+    silenced,
+    blockUser,
+    unblockUser,
+    silenceUser,
+    unsilenceUser
+  } = useUi()
+  const [revealed, setRevealed] = useState<Set<number>>(new Set())
   const { servers, instances } = useWorld()
   const [draft, setDraft] = useState('')
   const [menu, setMenu] = useState<MenuTarget | null>(null)
@@ -243,6 +283,11 @@ export function ChatArea(): React.JSX.Element | null {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [msgs?.length, activeChannelId])
+
+  // leaving a channel re-veils any blocked messages you'd revealed
+  useEffect(() => {
+    setRevealed(new Set())
+  }, [activeChannelId, activeServerId])
 
   if (!server) return null
 
@@ -472,6 +517,8 @@ export function ChatArea(): React.JSX.Element | null {
                     locked={!!keep?.world?.lock_name_style}
                     editing={editingId === m.id}
                     highlighted={highlightId === m.id}
+                    blockedHidden={!!blocked[m.author.pubkey] && !revealed.has(m.id)}
+                    onReveal={() => setRevealed((s) => new Set(s).add(m.id))}
                     onContextMenu={(e, msg) => {
                       e.preventDefault()
                       setMenu({ msg, x: e.clientX, y: e.clientY })
@@ -638,6 +685,9 @@ export function ChatArea(): React.JSX.Element | null {
           canEdit={!!self && menu.msg.author.id === self.id}
           canDelete={!!self && (menu.msg.author.id === self.id || canManage)}
           canPin={canManage}
+          canBlock={!self || menu.msg.author.id !== self.id}
+          blocked={!!blocked[menu.msg.author.pubkey]}
+          silenced={!!silenced[menu.msg.author.pubkey]}
           onReply={() => setReplyingTo(menu.msg)}
           onEdit={() => setEditingId(menu.msg.id)}
           onPin={() =>
@@ -645,6 +695,28 @@ export function ChatArea(): React.JSX.Element | null {
               ?.pinMessage(menu.msg.channel_id, menu.msg.id, !menu.msg.pinned)
               .catch(() => {})
           }
+          onSilence={() => {
+            const a = menu.msg.author
+            if (silenced[a.pubkey]) unsilenceUser(a.pubkey)
+            else
+              silenceUser({
+                pubkey: a.pubkey,
+                username: a.username,
+                fingerprint: a.fingerprint,
+                at: Date.now()
+              })
+          }}
+          onBlock={() => {
+            const a = menu.msg.author
+            if (blocked[a.pubkey]) unblockUser(a.pubkey)
+            else
+              blockUser({
+                pubkey: a.pubkey,
+                username: a.username,
+                fingerprint: a.fingerprint,
+                at: Date.now()
+              })
+          }}
           onDelete={() => doDelete(menu.msg)}
           onClose={() => setMenu(null)}
         />

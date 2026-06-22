@@ -20,6 +20,9 @@ let lastNotifyAt = 0
  *  level. Skips your own messages and the channel you're actively looking at. */
 function notifyMessage(instanceId: string, serverId: string, msg: KeepMessage, selfId?: number): void {
   if (selfId && msg.author.id === selfId) return // my own message echoed back
+  const ui0 = useUi.getState()
+  // silenced or blocked users never make a sound, regardless of prefs
+  if (ui0.silenced[msg.author.pubkey] || ui0.blocked[msg.author.pubkey]) return
   // 'all' plays; 'mentions' and 'nothing' stay quiet (no @mention system yet)
   if (resolved(instanceId, String(msg.channel_id)) !== 'all') return
   const ui = useUi.getState()

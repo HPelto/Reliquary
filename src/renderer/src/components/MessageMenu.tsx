@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Copy, Hash, Pencil, Pin, PinOff, Reply, Trash2 } from 'lucide-react'
+import { Ban, Bell, BellOff, Copy, Hash, Pencil, Pin, PinOff, Reply, Trash2 } from 'lucide-react'
 import type { KeepMessage } from '@/net/keep'
 
 export interface MenuTarget {
@@ -17,9 +17,14 @@ export function MessageMenu({
   canEdit,
   canDelete,
   canPin,
+  canBlock,
+  blocked,
+  silenced,
   onReply,
   onEdit,
   onPin,
+  onSilence,
+  onBlock,
   onDelete,
   onClose
 }: {
@@ -27,9 +32,14 @@ export function MessageMenu({
   canEdit: boolean
   canDelete: boolean
   canPin: boolean
+  canBlock: boolean
+  blocked: boolean
+  silenced: boolean
   onReply: () => void
   onEdit: () => void
   onPin: () => void
+  onSilence: () => void
+  onBlock: () => void
   onDelete: () => void
   onClose: () => void
 }): React.JSX.Element {
@@ -97,6 +107,24 @@ export function MessageMenu({
           onClick={() => copy(String(target.msg.id))}
           onClose={onClose}
         />
+        {canBlock && (
+          <>
+            <div className="my-1 h-px bg-edge" />
+            <Item
+              icon={silenced ? <Bell size={14} /> : <BellOff size={14} />}
+              label={silenced ? 'Unsilence User' : 'Silence User'}
+              onClick={onSilence}
+              onClose={onClose}
+            />
+            <Item
+              danger
+              icon={<Ban size={14} />}
+              label={blocked ? 'Unblock User' : 'Block User'}
+              onClick={onBlock}
+              onClose={onClose}
+            />
+          </>
+        )}
         {canDelete && (
           <>
             <div className="my-1 h-px bg-edge" />

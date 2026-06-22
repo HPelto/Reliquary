@@ -6,6 +6,7 @@ import { DEFAULT_NAME_COLOR } from '@/lib/nameStyle'
 import { ColorField } from './ColorField'
 import { pushProfileEverywhere } from '@/net/session'
 import { useUi } from '@/store'
+import { type BlockedUser } from '@/lib/blocks'
 import { SelfAvatar } from './KeepAvatar'
 import { ChangePasswordModal } from './ChangePasswordModal'
 import { NameStyleModal } from './NameStyleModal'
@@ -13,10 +14,21 @@ import { StyledName } from './StyledName'
 import { VoiceSettings } from './VoiceSettings'
 import { UpdatesCard } from './UpdatesCard'
 
-type Tab = 'profile' | 'account'
+type Tab = 'profile' | 'account' | 'blocked'
 
 export function SettingsModal(): React.JSX.Element | null {
-  const { settingsOpen, closeSettings, identity, setIdentity, profile, setProfile } = useUi()
+  const {
+    settingsOpen,
+    closeSettings,
+    identity,
+    setIdentity,
+    profile,
+    setProfile,
+    blocked,
+    silenced,
+    unblockUser,
+    unsilenceUser
+  } = useUi()
   const [tab, setTab] = useState<Tab>('profile')
 
   // draft state — applied on Save
@@ -133,7 +145,8 @@ export function SettingsModal(): React.JSX.Element | null {
         {(
           [
             { key: 'profile', label: 'My Profile' },
-            { key: 'account', label: 'Account' }
+            { key: 'account', label: 'Account' },
+            { key: 'blocked', label: 'Blocked Users' }
           ] as { key: Tab; label: string }[]
         ).map((t) => (
           <button
@@ -370,6 +383,31 @@ export function SettingsModal(): React.JSX.Element | null {
             <UpdatesCard />
           </div>
         )}
+
+        {tab === 'blocked' && (
+          <div className="mx-auto max-w-[560px] px-8 py-10">
+            <h1 className="font-display text-[22px] font-bold tracking-tight">Blocked Users</h1>
+            <p className="mt-1 text-[13px] text-mid">
+              Blocked users&apos; messages are veiled in chat until you choose to reveal them.
+              Silenced users never play the notification sound. Both apply across every Keep.
+            </p>
+
+            <BlockList
+              title="Blocked"
+              empty="You haven't blocked anyone."
+              users={Object.values(blocked).sort((a, b) => b.at - a.at)}
+              action="Unblock"
+              onAction={(pubkey) => unblockUser(pubkey)}
+            />
+            <BlockList
+              title="Silenced"
+              empty="No one is silenced."
+              users={Object.values(silenced).sort((a, b) => b.at - a.at)}
+              action="Unsilence"
+              onAction={(pubkey) => unsilenceUser(pubkey)}
+            />
+          </div>
+        )}
       </div>
 
       <ChangePasswordModal open={pwOpen} onClose={() => setPwOpen(false)} />
@@ -386,6 +424,53 @@ export function SettingsModal(): React.JSX.Element | null {
           setNameColor(color)
         }}
       />
+    </div>
+  )
+}
+
+function BlockList({
+  title,
+  empty,
+  users,
+  action,
+  onAction
+}: {
+  title: string
+  empty: string
+  users: BlockedUser[]
+  action: string
+  onAction: (pubkey: string) => void
+}): React.JSX.Element {
+  return (
+    <div className="mt-6 rounded-2xl border border-edge bg-void-1 p-5">
+      <div className="text-[11px] font-semibold tracking-[0.12em] text-lo uppercase">
+        {title} — {users.length}
+      </div>
+      {users.length === 0 ? (
+        <p className="mt-3 text-[13px] text-lo">{empty}</p>
+      ) : (
+        <div className="mt-3 flex flex-col gap-1.5">
+          {users.map((u) => (
+            <div
+              key={u.pubkey}
+              className="flex items-center gap-3 rounded-lg border border-edge bg-void-2 px-3 py-2"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13px] font-medium text-hi">
+                  {u.username || 'Unknown user'}
+                </div>
+                <div className="truncate font-mono text-[10.5px] text-lo">◆ {u.fingerprint}</div>
+              </div>
+              <button
+                onClick={() => onAction(u.pubkey)}
+                className="shrink-0 rounded-lg border border-edge px-3 py-1.5 text-[12px] text-mid transition-colors hover:border-relic/40 hover:text-hi"
+              >
+                {action}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
