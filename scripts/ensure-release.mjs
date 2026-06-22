@@ -13,10 +13,44 @@
 // Needs GH_TOKEN in the environment (same as `electron-builder --publish`).
 
 import { readFileSync, existsSync } from 'node:fs'
+import { execSync } from 'node:child_process'
 
 const REPO = 'HPelto/Reliquary'
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url)))
 const tag = `v${version}`
+
+// Release notes from the commit subjects since the previous release tag.
+function buildBody() {
+  const git = (cmd) => {
+    try {
+      return execSync(cmd, { encoding: 'utf8' }).trim()
+    } catch {
+      return ''
+    }
+  }
+  const prev = git(`git describe --tags --abbrev=0 ${tag}^`)
+  const range = prev ? `${prev}..${tag}` : `${tag} -n 25`
+  const subjects = git(`git log ${range} --no-merges --pretty=format:%s`)
+    .split('\n')
+    .map((s) => s.trim())
+    // drop the version-bump commit (just the bare version number)
+    .filter((s) => s && !/^v?\d+\.\d+\.\d+$/.test(s))
+  const bullets = subjects.length ? subjects.map((s) => `- ${s}`).join('\n') : '- Maintenance and fixes'
+  return [
+    `## What's new in ${version}`,
+    '',
+    bullets,
+    '',
+    '---',
+    '',
+    '**Get Reliquary**',
+    '- **Client (Windows):** the installer below, or https://hpelto.github.io/Reliquary/',
+    '- **Host your own server:** download `Keep-Portable-Windows.zip` below, unzip, and run `start-keep.cmd` — no install needed.',
+    '',
+    '_Client updates apply automatically. Server changes reach a running Keep via the Host Console → Update & Restart._'
+  ].join('\n')
+}
+const body = buildBody()
 
 const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN
 if (!token) {
@@ -36,12 +70,18 @@ const getRelease = async () => {
 
 let release = await getRelease()
 if (release) {
-  console.log(`ensure-release: ${tag} already exists`)
+  // keep the notes current (handy on re-runs / backfills)
+  await fetch(`https://api.github.com/repos/${REPO}/releases/${release.id}`, {
+    method: 'PATCH',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: version, body })
+  })
+  console.log(`ensure-release: ${tag} already exists — refreshed notes`)
 } else {
   const res = await fetch(`https://api.github.com/repos/${REPO}/releases`, {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tag_name: tag, name: version, draft: false, prerelease: false })
+    body: JSON.stringify({ tag_name: tag, name: version, body, draft: false, prerelease: false })
   })
   if (res.ok) {
     release = await res.json()
