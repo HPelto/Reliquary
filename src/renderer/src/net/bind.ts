@@ -40,7 +40,7 @@ function upsertMember(instanceId: string, user: KeepUser, online?: boolean): voi
 export function createKeep(
   instanceId: string,
   serverId: string,
-  target: { host: string; port: number }
+  target: { host: string; port: number; secure?: boolean }
 ): KeepConnection {
   dropKeep(instanceId)
 

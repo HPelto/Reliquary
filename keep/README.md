@@ -51,6 +51,41 @@ Both are configurable — if you change them, forward the values you set:
 > The `/admin` host console is on the same TCP port (`http://localhost:7777/admin`),
 > gated by the host key. Use it **locally**; don't expose it publicly without TLS.
 
+## Encryption (TLS) — optional
+
+A Keep runs **plain `ws://`/`http://` by default** — zero setup, which keeps
+self-hosting accessible. Traffic (including your messages and session token) is
+then unencrypted on the network path, so on an untrusted network anyone in the
+middle could read it. If that matters to you, turn TLS on; you have two ways:
+
+**1. From the Host Console (recommended).** Open `/admin` → **TLS / encryption**,
+tick *Enable TLS*, enter the paths to your certificate and private key (PEM files
+on the Keep machine), Save, then **Restart**. The Keep comes back on `https`/`wss`.
+If the cert can't be loaded it falls back to plain http and logs why, so a typo
+can never lock you out of the console.
+
+**2. At launch.** Pass the cert and key as flags:
+
+```sh
+./keep -tls-cert /path/to/fullchain.pem -tls-key /path/to/privkey.pem
+```
+
+Either way, clients reach a TLS Keep with an `https://` address (e.g.
+`https://keep.example` behind a proxy on 443, or `https://keep.example:8443` for
+TLS directly on another port). Get a certificate from **Let's Encrypt** (free) or
+use a self-signed one for a private group.
+
+**Or terminate TLS with a reverse proxy.** Putting **Caddy**, **nginx**, or
+**Cloudflare** in front (TLS on :443 → forwarding to the Keep on :7777) works
+without any Keep-side cert config — clients just use `https://your-domain`. Caddy
+example:
+
+```
+keep.example {
+    reverse_proxy localhost:7777
+}
+```
+
 ## Privacy & your network address
 
 Reliquary is **decentralized and self-hosted** — there's no company server sitting

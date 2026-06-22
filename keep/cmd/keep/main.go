@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"flag"
 	"log"
@@ -30,6 +31,8 @@ func main() {
 	name := flag.String("name", "Reliquary Keep", "instance display name")
 	voicePort := flag.Int("voice-port", 7011, "UDP port for voice (SFU); forward this port too")
 	voiceIP := flag.String("voice-ip", os.Getenv("VOICE_PUBLIC_IP"), "public IP to advertise for voice (optional; default: gather from interfaces)")
+	tlsCert := flag.String("tls-cert", "", "path to a TLS certificate (PEM); serves https/wss when set together with -tls-key")
+	tlsKey := flag.String("tls-key", "", "path to the TLS private key (PEM); pairs with -tls-cert")
 	flag.Parse()
 
 	st, err := store.Open(*data)
@@ -47,6 +50,29 @@ func main() {
 	})
 	if stored, _ := st.GetSetting(api.SettingAddr); stored != "" && !addrExplicit {
 		*addr = stored
+	}
+
+	// TLS is optional and off by default. Explicit -tls-cert/-tls-key flags win;
+	// otherwise use whatever the host console saved. A cert that won't load never
+	// crashes the Keep — we fall back to plain http so the owner can still reach
+	// the console and fix it.
+	certPath, keyPath := *tlsCert, *tlsKey
+	if certPath == "" && keyPath == "" {
+		if en, _ := st.GetSetting(api.SettingTLSEnabled); en == "1" {
+			certPath, _ = st.GetSetting(api.SettingTLSCertPath)
+			keyPath, _ = st.GetSetting(api.SettingTLSKeyPath)
+		}
+	}
+	useTLS := certPath != "" && keyPath != ""
+	if useTLS {
+		if _, err := tls.LoadX509KeyPair(certPath, keyPath); err != nil {
+			log.Printf("  TLS:         could not load cert/key (%v) — falling back to plain http", err)
+			useTLS = false
+		}
+	}
+	scheme := "http"
+	if useTLS {
+		scheme = "https"
 	}
 
 	hub := gateway.NewHub(st)
@@ -81,11 +107,14 @@ func main() {
 		if err := st.SetSetting(api.SettingAdminKeyHash, api.HashAdminKey(adminKey)); err != nil {
 			log.Fatalf("save admin key: %v", err)
 		}
-		log.Printf("  admin GUI:   http://localhost%s/admin", *addr)
+		log.Printf("  admin GUI:   %s://localhost%s/admin", scheme, *addr)
 		log.Printf("  admin key:   %s", adminKey)
 		log.Printf("  (shown ONCE — save it. it is stored hashed and cannot be re-printed)")
 	} else {
-		log.Printf("  admin GUI:   http://localhost%s/admin (key was printed on first boot)", *addr)
+		log.Printf("  admin GUI:   %s://localhost%s/admin (key was printed on first boot)", scheme, *addr)
+	}
+	if useTLS {
+		log.Printf("  TLS:         enabled (cert: %s) — clients connect over https/wss", certPath)
 	}
 	if count == 0 {
 		log.Printf("  this keep is unclaimed — the first identity to complete a handshake becomes the owner")
@@ -115,7 +144,11 @@ func main() {
 		srv.SetUpdateRestart(func() { shutdown(updateExitCode) })
 	}
 
-	err = httpSrv.ListenAndServe()
+	if useTLS {
+		err = httpSrv.ListenAndServeTLS(certPath, keyPath)
+	} else {
+		err = httpSrv.ListenAndServe()
+	}
 	st.Close()
 	if err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)

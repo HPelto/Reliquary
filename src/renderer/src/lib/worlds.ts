@@ -12,6 +12,8 @@ export interface SavedWorld {
   serverId: string
   host: string
   port: number
+  /** true if joined over https/wss; undefined = infer from port (legacy worlds) */
+  secure?: boolean
   name: string
   abbr: string
   accent: string

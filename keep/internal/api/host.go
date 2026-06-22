@@ -5,6 +5,7 @@ package api
 // assignment, user removal, listen address. See admin.go for the tiers.
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -39,6 +40,9 @@ func (s *Server) handleHostState(w http.ResponseWriter, r *http.Request) {
 	addr, _ := s.st.GetSetting(SettingAddr)
 	channels, _ := s.st.Channels()
 	invites, _ := s.st.Invites()
+	tlsEnabled, _ := s.st.GetSetting(SettingTLSEnabled)
+	tlsCert, _ := s.st.GetSetting(SettingTLSCertPath)
+	tlsKey, _ := s.st.GetSetting(SettingTLSKeyPath)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":              s.instanceName(),
@@ -52,6 +56,59 @@ func (s *Server) handleHostState(w http.ResponseWriter, r *http.Request) {
 		"online_count":      len(online),
 		"restart_available": s.restartFn != nil,
 		"update_available":  s.updateFn != nil,
+		"tls_enabled":       tlsEnabled == "1",
+		"tls_cert_path":     tlsCert,
+		"tls_key_path":      tlsKey,
+	})
+}
+
+type tlsReq struct {
+	Enabled  bool   `json:"enabled"`
+	CertPath string `json:"cert_path"`
+	KeyPath  string `json:"key_path"`
+}
+
+// handleHostTLS stores the TLS config; it applies on the next restart. Enabling
+// validates that the cert+key actually load, so a typo can't be saved as
+// "enabled" — and even if one slips through, boot falls back to plain http
+// rather than crashing (see cmd/keep/main.go), so the owner is never locked out.
+func (s *Server) handleHostTLS(w http.ResponseWriter, r *http.Request) {
+	var req tlsReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	req.CertPath = strings.TrimSpace(req.CertPath)
+	req.KeyPath = strings.TrimSpace(req.KeyPath)
+	if req.Enabled {
+		if req.CertPath == "" || req.KeyPath == "" {
+			writeError(w, http.StatusBadRequest, "certificate and key file paths are both required to enable TLS")
+			return
+		}
+		if _, err := tls.LoadX509KeyPair(req.CertPath, req.KeyPath); err != nil {
+			writeError(w, http.StatusBadRequest, "couldn't load that certificate/key: "+err.Error())
+			return
+		}
+	}
+	enabled := ""
+	if req.Enabled {
+		enabled = "1"
+	}
+	for k, v := range map[string]string{
+		SettingTLSCertPath: req.CertPath,
+		SettingTLSKeyPath:  req.KeyPath,
+		SettingTLSEnabled:  enabled,
+	} {
+		if err := s.st.SetSetting(k, v); err != nil {
+			writeError(w, http.StatusInternalServerError, "storage error")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tls_enabled":   req.Enabled,
+		"tls_cert_path": req.CertPath,
+		"tls_key_path":  req.KeyPath,
+		"note":          "takes effect on restart",
 	})
 }
 

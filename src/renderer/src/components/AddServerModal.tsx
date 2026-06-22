@@ -155,6 +155,7 @@ function JoinTab(): React.JSX.Element {
       serverId: `joined-${target.host}`,
       host: target.host,
       port: target.port,
+      secure: target.secure,
       name: world.name,
       abbr,
       accent,

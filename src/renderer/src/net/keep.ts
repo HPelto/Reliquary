@@ -168,10 +168,12 @@ export class KeepConnection {
   private reconnectMs = RECONNECT_BASE_MS
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
-  constructor(target: { host: string; port: number }, events: KeepEvents = {}) {
+  constructor(target: { host: string; port: number; secure?: boolean }, events: KeepEvents = {}) {
     this.host = target.host
     this.port = target.port
-    const secure = target.port === 443
+    // Explicit https/wss scheme wins; otherwise fall back to the legacy
+    // port-443 inference so existing saved Keeps keep working unchanged.
+    const secure = target.secure ?? target.port === 443
     const portPart = secure || target.port === 80 ? '' : `:${target.port}`
     this.baseUrl = `${secure ? 'https' : 'http'}://${target.host}${portPart}`
     this.wsUrl = `${secure ? 'wss' : 'ws'}://${target.host}${portPart}`

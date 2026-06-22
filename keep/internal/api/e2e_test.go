@@ -475,6 +475,18 @@ func TestHostAndKeepPassword(t *testing.T) {
 		t.Fatalf("addr setting not stored, got %q", got)
 	}
 
+	// TLS config: enabling needs both paths and a cert that actually loads;
+	// disabling clears the flag; default state is off.
+	hostDo("POST", "/v1/host/tls", map[string]any{"enabled": true}, "host-key", 400)
+	hostDo("POST", "/v1/host/tls", map[string]any{"enabled": true, "cert_path": "/no/such/cert.pem", "key_path": "/no/such/key.pem"}, "host-key", 400)
+	hostDo("POST", "/v1/host/tls", map[string]any{"enabled": false, "cert_path": "/some/cert.pem", "key_path": "/some/key.pem"}, "host-key", 200)
+	if got, _ := st.GetSetting(api.SettingTLSEnabled); got != "" {
+		t.Fatalf("tls should be disabled, got %q", got)
+	}
+	if state := hostDo("GET", "/v1/host/state", nil, "host-key", 200); state["tls_enabled"] != false {
+		t.Fatalf("tls_enabled should be false, got %v", state["tls_enabled"])
+	}
+
 	// restart is gated on a supervisor wiring SetRestart; unset → 501, and
 	// host state reflects availability
 	state := hostDo("GET", "/v1/host/state", nil, "host-key", 200)

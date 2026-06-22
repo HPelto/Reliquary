@@ -38,6 +38,8 @@ export interface RelicTarget {
   name?: string
   token?: string
   fingerprint?: string
+  /** true when the address used an https/wss scheme; undefined = infer (port 443) */
+  secure?: boolean
   source: 'code' | 'uri' | 'domain' | 'ip'
 }
 
@@ -261,6 +263,25 @@ export async function parseAddress(input: string): Promise<RelicTarget | null> {
         port: url.port ? Number(url.port) : DEFAULT_PORT,
         token,
         source: IP_RE.test(url.hostname) ? 'ip' : 'uri'
+      }
+    } catch {
+      return null
+    }
+  }
+
+  // Explicit web scheme — https/wss means a TLS Keep (works on any port, not
+  // just 443). ws/http are plaintext. This is how the client learns to use wss.
+  const scheme = raw.match(/^(https?|wss?):\/\//i)
+  if (scheme) {
+    try {
+      const norm = raw.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://')
+      const url = new URL(norm)
+      const secure = /^(https|wss)$/i.test(scheme[1])
+      return {
+        host: url.hostname,
+        port: url.port ? Number(url.port) : secure ? 443 : DEFAULT_PORT,
+        secure,
+        source: IP_RE.test(url.hostname) ? 'ip' : 'domain'
       }
     } catch {
       return null

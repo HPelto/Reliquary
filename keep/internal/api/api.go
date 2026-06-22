@@ -128,6 +128,7 @@ func New(st *store.Store, hub *gateway.Hub, cfg Config) *Server {
 				r.Patch("/users/{id}", s.handleHostSetRole)
 				r.Delete("/users/{id}", s.handleHostDeleteUser)
 				r.Post("/addr", s.handleHostAddr)
+				r.Post("/tls", s.handleHostTLS)
 				r.Post("/rescue-invite", s.handleHostRescueInvite)
 				r.Post("/restart", s.handleHostRestart)
 				r.Post("/update-restart", s.handleHostUpdateRestart)

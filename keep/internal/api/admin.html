@@ -150,6 +150,30 @@
     </div>
     <div id="restartMsg" class="note" style="margin-top:8px"></div>
   </div>
+
+  <div class="card">
+    <div style="font-size:13.5px;font-weight:500;color:var(--hi)">TLS / encryption</div>
+    <div class="note" style="margin-top:2px">
+      Off by default. Point to a certificate and key file on this machine to serve
+      <span class="mono">https</span>/<span class="mono">wss</span> instead of plaintext.
+      Takes effect on restart — and if the cert can't load, the Keep stays on plain
+      http so you're never locked out of this console.
+    </div>
+    <label style="margin-top:12px;display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--hi);cursor:pointer">
+      <input type="checkbox" id="tlsEnabled"> Enable TLS
+    </label>
+    <div class="bar" style="margin-top:10px">
+      <input id="tlsCert" class="mono" placeholder="/path/to/fullchain.pem (certificate)" style="flex:1;min-width:0">
+    </div>
+    <div class="bar" style="margin-top:6px">
+      <input id="tlsKey" class="mono" placeholder="/path/to/privkey.pem (private key)" style="flex:1;min-width:0">
+    </div>
+    <div class="bar" style="margin-top:10px">
+      <button onclick="saveTLS()">Save TLS settings</button>
+      <span class="note" style="align-self:center;margin-top:0">takes effect on restart</span>
+    </div>
+    <div class="err" id="tlsErr"></div>
+  </div>
 </div>
 
 <script>
@@ -194,6 +218,9 @@ function renderState(st) {
   $('pwStatus').textContent = st.keep_password_set ? 'SET — joins require it' : 'not set'
   $('pwStatus').className = 'mono ' + (st.keep_password_set ? 'ok' : 'faint')
   if (document.activeElement !== $('addrInput')) $('addrInput').value = st.addr || ''
+  $('tlsEnabled').checked = !!st.tls_enabled
+  if (document.activeElement !== $('tlsCert')) $('tlsCert').value = st.tls_cert_path || ''
+  if (document.activeElement !== $('tlsKey')) $('tlsKey').value = st.tls_key_path || ''
   $('restartRow').classList.toggle('hidden', !st.restart_available)
   $('updateBtn').style.display = st.update_available ? '' : 'none'
   $('checkBtn').style.display = st.update_available ? '' : 'none'
@@ -263,6 +290,17 @@ async function saveAddr() {
     await api('/v1/host/addr', { method: 'POST', body: JSON.stringify({ addr: $('addrInput').value }) })
     $('addrErr').textContent = ''
   } catch (e) { $('addrErr').textContent = e.message }
+}
+async function saveTLS() {
+  try {
+    await api('/v1/host/tls', { method: 'POST', body: JSON.stringify({
+      enabled: $('tlsEnabled').checked,
+      cert_path: $('tlsCert').value,
+      key_path: $('tlsKey').value
+    }) })
+    $('tlsErr').style.color = 'var(--pulse)'
+    $('tlsErr').textContent = 'Saved — restart the Keep to apply.'
+  } catch (e) { $('tlsErr').style.color = 'var(--ember)'; $('tlsErr').textContent = e.message }
 }
 
 // poll discovery until the rebuilt server answers again, then reload
