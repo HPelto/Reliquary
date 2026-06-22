@@ -71,8 +71,10 @@ export function VideoPlayer({
   const onSurface = (): void => {
     const v = vRef.current
     if (onExpand) {
-      // hand off our position + state, then stop here so only one copy plays
-      onExpand(v?.currentTime ?? 0, v ? !v.paused : false)
+      // hand off the latest known position + state, then stop here so only one
+      // copy plays. playbackPos is kept current by whichever view is active.
+      const t = playbackPos.get(src) ?? v?.currentTime ?? 0
+      onExpand(t, v ? !v.paused : false)
       v?.pause()
     } else {
       togglePlay()
@@ -128,13 +130,23 @@ export function VideoPlayer({
   const pct = dur ? (cur / dur) * 100 : 0
   const showControls = started && (hover || !playing || fs)
 
+  // Initial position via a media fragment (#t=) so the browser starts there and
+  // the HTML autoPlay attribute can resume it — programmatic play() after async
+  // loadedmetadata gets blocked by the autoplay policy (gesture expired).
+  const initialStart = useRef(
+    startAt && startAt > 0 ? startAt : (playbackPos.get(src) ?? 0)
+  ).current
+  const playSrc = initialStart > 0 ? `${src}#t=${initialStart}` : src
+
   const boxClass = fs
-    ? 'flex h-screen w-screen items-center justify-center bg-void-0'
+    ? 'h-screen w-screen bg-void-0'
     : large
       ? 'w-fit max-w-full rounded-lg border border-edge'
       : 'rounded-lg border border-edge'
+  // fs: h-full/w-full (not max-*) so a small-resolution video scales UP to fill;
+  // object-contain keeps the aspect (fills matching screens, letterboxes others).
   const videoClass = fs
-    ? 'max-h-full max-w-full object-contain'
+    ? 'h-full w-full object-contain'
     : large
       ? 'block max-h-[82vh] max-w-full object-contain'
       : 'block h-full w-full object-contain'
@@ -149,7 +161,8 @@ export function VideoPlayer({
     >
       <video
         ref={vRef}
-        src={src}
+        src={playSrc}
+        autoPlay={autoPlay}
         playsInline
         onClick={onSurface}
         onPlay={() => {
@@ -165,14 +178,7 @@ export function VideoPlayer({
         onLoadedMetadata={(e) => {
           const v = e.currentTarget
           setDur(v.duration)
-          // resume from the handed-off position, else the last remembered spot —
-          // then play. Seeking before play avoids a flash of frame 0.
-          const resume = startAt && startAt > 0 ? startAt : (playbackPos.get(src) ?? 0)
-          if (resume > 0 && resume < v.duration) {
-            v.currentTime = resume
-            setCur(resume)
-          }
-          if (autoPlay) void v.play().catch(() => {})
+          setCur(v.currentTime) // already at the #t= position
         }}
         onVolumeChange={(e) => {
           setMuted(e.currentTarget.muted)
