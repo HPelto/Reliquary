@@ -52,12 +52,23 @@ export interface Attachment {
   size: number
 }
 
+export interface ReplyPreview {
+  id: number
+  author_id: number
+  author_username: string
+  content: string
+  has_attachments: boolean
+}
+
 export interface KeepMessage {
   id: number
   channel_id: number
   author: KeepUser
   content: string
   attachments?: Attachment[]
+  reply_to?: number // referenced message id, 0/undefined = not a reply
+  reply_preview?: ReplyPreview // null/undefined if the original was deleted
+  pinned?: boolean
   created_at: number
   edited_at?: number // unix ms, 0/undefined = never edited
 }
@@ -404,12 +415,26 @@ export class KeepConnection {
   async sendMessage(
     channelId: number,
     content: string,
-    attachments?: Attachment[]
+    attachments?: Attachment[],
+    replyTo?: number
   ): Promise<KeepMessage> {
     return this.request<KeepMessage>(`/v1/channels/${channelId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ content, attachments: attachments ?? [] })
+      body: JSON.stringify({ content, attachments: attachments ?? [], reply_to: replyTo ?? 0 })
     })
+  }
+
+  /** Pin/unpin a message (owner/admin). Echoes via the MESSAGE_UPDATE broadcast. */
+  async pinMessage(channelId: number, id: number, pinned: boolean): Promise<void> {
+    await this.request(`/v1/channels/${channelId}/messages/${id}/pin`, {
+      method: pinned ? 'POST' : 'DELETE'
+    })
+  }
+
+  /** Fetch a channel's pinned messages (newest first). */
+  async loadPins(channelId: number): Promise<KeepMessage[]> {
+    const res = await this.request<{ messages: KeepMessage[] }>(`/v1/channels/${channelId}/pins`)
+    return res.messages
   }
 
   /** Edit own message. Update echoes back via the MESSAGE_UPDATE broadcast. */

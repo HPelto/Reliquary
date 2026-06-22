@@ -82,14 +82,28 @@ type Attachment struct {
 	Size        int64  `json:"size"`
 }
 
+// ReplyPreview is the lightweight snapshot of the message a reply points at, so
+// the client can render the quoted line without a second fetch. Nil when the
+// original was deleted.
+type ReplyPreview struct {
+	ID             int64  `json:"id"`
+	AuthorID       int64  `json:"author_id"`
+	AuthorUsername string `json:"author_username"`
+	Content        string `json:"content"`
+	HasAttachments bool   `json:"has_attachments"`
+}
+
 type Message struct {
-	ID          int64        `json:"id"`
-	ChannelID   int64        `json:"channel_id"`
-	Author      User         `json:"author"`
-	Content     string       `json:"content"`
-	Attachments []Attachment `json:"attachments"`
-	CreatedAt   int64        `json:"created_at"` // unix ms
-	EditedAt    int64        `json:"edited_at"`  // unix ms, 0 = never edited
+	ID          int64         `json:"id"`
+	ChannelID   int64         `json:"channel_id"`
+	Author      User          `json:"author"`
+	Content     string        `json:"content"`
+	Attachments []Attachment  `json:"attachments"`
+	ReplyTo     int64         `json:"reply_to"`               // referenced message id, 0 = not a reply
+	ReplyPreview *ReplyPreview `json:"reply_preview,omitempty"` // resolved snapshot, nil if original gone
+	Pinned      bool          `json:"pinned"`
+	CreatedAt   int64         `json:"created_at"` // unix ms
+	EditedAt    int64         `json:"edited_at"`  // unix ms, 0 = never edited
 }
 
 type Invite struct {
@@ -228,10 +242,13 @@ CREATE TABLE IF NOT EXISTS events (
 		}
 	}
 
-	// message attachments + edit timestamp added after messaging shipped
+	// message attachments + edit timestamp added after messaging shipped;
+	// reply_to + pinned added alongside replies/pins
 	for _, col := range []struct{ name, ddl string }{
 		{"attachments", "attachments TEXT NOT NULL DEFAULT '[]'"},
 		{"edited_at", "edited_at INTEGER NOT NULL DEFAULT 0"},
+		{"reply_to", "reply_to INTEGER NOT NULL DEFAULT 0"},
+		{"pinned", "pinned INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if !s.columnExists("messages", col.name) {
 			if _, err := s.db.Exec(`ALTER TABLE messages ADD COLUMN ` + col.ddl); err != nil {
@@ -513,7 +530,7 @@ func (s *Store) ChannelByID(id int64) (Channel, error) {
 	return c, err
 }
 
-func (s *Store) CreateMessage(channelID, authorID int64, content string, attachments []Attachment) (Message, error) {
+func (s *Store) CreateMessage(channelID, authorID int64, content string, attachments []Attachment, replyTo int64) (Message, error) {
 	author, err := scanUser(s.db.QueryRow(
 		`SELECT `+userCols+` FROM profiles WHERE id = ?`, authorID))
 	if err != nil {
@@ -525,18 +542,20 @@ func (s *Store) CreateMessage(channelID, authorID int64, content string, attachm
 	attachJSON, _ := json.Marshal(attachments)
 	created := nowMS()
 	res, err := s.db.Exec(
-		`INSERT INTO messages (channel_id, author_id, content, attachments, created_at) VALUES (?, ?, ?, ?, ?)`,
-		channelID, authorID, content, string(attachJSON), created,
+		`INSERT INTO messages (channel_id, author_id, content, attachments, reply_to, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		channelID, authorID, content, string(attachJSON), replyTo, created,
 	)
 	if err != nil {
 		return Message{}, err
 	}
 	id, _ := res.LastInsertId()
-	return Message{ID: id, ChannelID: channelID, Author: author, Content: content, Attachments: attachments, CreatedAt: created}, nil
+	m := Message{ID: id, ChannelID: channelID, Author: author, Content: content, Attachments: attachments, ReplyTo: replyTo, CreatedAt: created}
+	s.resolveReply(&m)
+	return m, nil
 }
 
 // shared message SELECT — keep Messages() and MessageByID() in lockstep.
-const msgCols = `m.id, m.channel_id, m.content, m.attachments, m.created_at, m.edited_at,
+const msgCols = `m.id, m.channel_id, m.content, m.attachments, m.reply_to, m.pinned, m.created_at, m.edited_at,
 	             u.id, u.pubkey, u.fingerprint, u.username, u.accent, u.role,
 	             u.about, u.status, u.avatar, u.background, u.name_font, u.name_effect, u.name_color`
 
@@ -547,13 +566,15 @@ type rowScanner interface {
 func scanMessage(sc rowScanner) (Message, error) {
 	var m Message
 	var attachJSON string
-	if err := sc.Scan(&m.ID, &m.ChannelID, &m.Content, &attachJSON, &m.CreatedAt, &m.EditedAt,
+	var pinned int
+	if err := sc.Scan(&m.ID, &m.ChannelID, &m.Content, &attachJSON, &m.ReplyTo, &pinned, &m.CreatedAt, &m.EditedAt,
 		&m.Author.ID, &m.Author.Pubkey, &m.Author.Fingerprint,
 		&m.Author.Username, &m.Author.Accent, &m.Author.Role,
 		&m.Author.About, &m.Author.Status, &m.Author.Avatar, &m.Author.Background,
 		&m.Author.NameFont, &m.Author.NameEffect, &m.Author.NameColor); err != nil {
 		return Message{}, err
 	}
+	m.Pinned = pinned != 0
 	if attachJSON != "" {
 		_ = json.Unmarshal([]byte(attachJSON), &m.Attachments)
 	}
@@ -561,6 +582,28 @@ func scanMessage(sc rowScanner) (Message, error) {
 		m.Attachments = []Attachment{}
 	}
 	return m, nil
+}
+
+// resolveReply fills m.ReplyPreview from m.ReplyTo. Left nil if the original was
+// deleted, so the client can show "original message deleted".
+func (s *Store) resolveReply(m *Message) {
+	if m.ReplyTo == 0 {
+		return
+	}
+	var p ReplyPreview
+	var attachJSON string
+	err := s.db.QueryRow(
+		`SELECT m.id, m.content, m.attachments, u.id, u.username
+		 FROM messages m JOIN profiles u ON u.id = m.author_id WHERE m.id = ?`, m.ReplyTo).
+		Scan(&p.ID, &p.Content, &attachJSON, &p.AuthorID, &p.AuthorUsername)
+	if err != nil {
+		return
+	}
+	if r := []rune(p.Content); len(r) > 120 {
+		p.Content = string(r[:120]) + "…"
+	}
+	p.HasAttachments = attachJSON != "" && attachJSON != "[]"
+	m.ReplyPreview = &p
 }
 
 // MessageByID fetches one message (used to authorize edit/delete and to return
@@ -571,7 +614,53 @@ func (s *Store) MessageByID(id int64) (Message, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return Message{}, ErrNotFound
 	}
-	return m, err
+	if err != nil {
+		return Message{}, err
+	}
+	s.resolveReply(&m)
+	return m, nil
+}
+
+// SetPinned toggles a message's pinned flag and returns the updated message.
+func (s *Store) SetPinned(id int64, pinned bool) (Message, error) {
+	v := 0
+	if pinned {
+		v = 1
+	}
+	res, err := s.db.Exec(`UPDATE messages SET pinned = ? WHERE id = ?`, v, id)
+	if err != nil {
+		return Message{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Message{}, ErrNotFound
+	}
+	return s.MessageByID(id)
+}
+
+// PinnedMessages lists a channel's pinned messages, most recently posted first.
+func (s *Store) PinnedMessages(channelID int64) ([]Message, error) {
+	rows, err := s.db.Query(
+		`SELECT `+msgCols+` FROM messages m JOIN profiles u ON u.id = m.author_id
+		 WHERE m.channel_id = ? AND m.pinned = 1 ORDER BY m.id DESC`, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Message{}
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		s.resolveReply(&out[i]) // after draining — single SQLite connection
+	}
+	return out, nil
 }
 
 // UpdateMessage edits content (author-only — author_id is part of the WHERE so
@@ -633,6 +722,11 @@ func (s *Store) Messages(channelID int64, limit int, before int64) ([]Message, e
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	// resolve replies only after the result set is drained — SQLite runs on a
+	// single connection, so a nested query while `rows` is open would deadlock.
+	for i := range out {
+		s.resolveReply(&out[i])
 	}
 	// reverse to oldest-first
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {

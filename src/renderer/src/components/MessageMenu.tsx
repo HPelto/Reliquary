@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Copy, Hash, Pencil, Trash2 } from 'lucide-react'
+import { Copy, Hash, Pencil, Pin, PinOff, Reply, Trash2 } from 'lucide-react'
 import type { KeepMessage } from '@/net/keep'
 
 export interface MenuTarget {
@@ -16,14 +16,20 @@ export function MessageMenu({
   target,
   canEdit,
   canDelete,
+  canPin,
+  onReply,
   onEdit,
+  onPin,
   onDelete,
   onClose
 }: {
   target: MenuTarget
   canEdit: boolean
   canDelete: boolean
+  canPin: boolean
+  onReply: () => void
   onEdit: () => void
+  onPin: () => void
   onDelete: () => void
   onClose: () => void
 }): React.JSX.Element {
@@ -67,8 +73,17 @@ export function MessageMenu({
         style={{ position: 'fixed', left: pos.left, top: pos.top }}
         className="glass palette-in z-[200] w-[212px] rounded-xl p-1.5 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]"
       >
+        <Item icon={<Reply size={14} />} label="Reply" onClick={onReply} onClose={onClose} />
         {canEdit && (
           <Item icon={<Pencil size={14} />} label="Edit Message" onClick={onEdit} onClose={onClose} />
+        )}
+        {canPin && (
+          <Item
+            icon={target.msg.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+            label={target.msg.pinned ? 'Unpin Message' : 'Pin Message'}
+            onClick={onPin}
+            onClose={onClose}
+          />
         )}
         <Item
           icon={<Copy size={14} />}

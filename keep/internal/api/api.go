@@ -99,6 +99,9 @@ func New(st *store.Store, hub *gateway.Hub, cfg Config) *Server {
 				r.Post("/channels/{id}/messages", s.handleCreateMessage)
 				r.Patch("/channels/{id}/messages/{mid}", s.handleEditMessage)
 				r.Delete("/channels/{id}/messages/{mid}", s.handleDeleteMessage)
+				r.Post("/channels/{id}/messages/{mid}/pin", s.handlePinMessage)
+				r.Delete("/channels/{id}/messages/{mid}/pin", s.handleUnpinMessage)
+				r.Get("/channels/{id}/pins", s.handleListPins)
 				r.Post("/invites", s.handleCreateInvite)
 				r.Patch("/profile", s.handlePatchProfile)
 				r.Get("/media/{hash}/exists", s.handleMediaExists)
@@ -279,6 +282,7 @@ const maxAttachments = 10
 type createMessageReq struct {
 	Content     string             `json:"content"`
 	Attachments []store.Attachment `json:"attachments"`
+	ReplyTo     int64              `json:"reply_to"`
 }
 
 // validateAttachments caps the count and confirms each referenced blob was
@@ -341,14 +345,68 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "a message needs text or an attachment")
 		return
 	}
+	// a reply must point at a real message in this same channel
+	var replyTo int64
+	if req.ReplyTo > 0 {
+		ref, err := s.st.MessageByID(req.ReplyTo)
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusBadRequest, "the message you're replying to no longer exists")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "storage error")
+			return
+		}
+		if ref.ChannelID != ch.ID {
+			writeError(w, http.StatusBadRequest, "you can only reply to a message in the same channel")
+			return
+		}
+		replyTo = req.ReplyTo
+	}
 	user := userFrom(r.Context())
-	msg, err := s.st.CreateMessage(ch.ID, user.ID, req.Content, attachments)
+	msg, err := s.st.CreateMessage(ch.ID, user.ID, req.Content, attachments, replyTo)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "storage error")
 		return
 	}
 	s.hub.Broadcast("MESSAGE_CREATE", msg)
 	writeJSON(w, http.StatusCreated, msg)
+}
+
+// handlePinMessage / handleUnpinMessage toggle a message's pinned state.
+// Owner/admin only — pins are channel curation, like other moderation.
+func (s *Server) handlePinMessage(w http.ResponseWriter, r *http.Request)   { s.setPin(w, r, true) }
+func (s *Server) handleUnpinMessage(w http.ResponseWriter, r *http.Request) { s.setPin(w, r, false) }
+
+func (s *Server) setPin(w http.ResponseWriter, r *http.Request, pinned bool) {
+	if !s.isManager(r) {
+		writeError(w, http.StatusForbidden, "only owners and admins can pin messages")
+		return
+	}
+	msg, ok := s.messageFromPath(w, r)
+	if !ok {
+		return
+	}
+	updated, err := s.st.SetPinned(msg.ID, pinned)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+	s.hub.Broadcast("MESSAGE_UPDATE", updated)
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) handleListPins(w http.ResponseWriter, r *http.Request) {
+	ch, ok := s.channelFromPath(w, r)
+	if !ok {
+		return
+	}
+	pins, err := s.st.PinnedMessages(ch.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"messages": pins})
 }
 
 func (s *Server) messageFromPath(w http.ResponseWriter, r *http.Request) (store.Message, bool) {

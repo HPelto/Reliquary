@@ -295,6 +295,30 @@ func TestEndToEnd(t *testing.T) {
 	if edited["edited_at"].(float64) == 0 {
 		t.Fatalf("edited_at not stamped: %v", edited)
 	}
+
+	// reply: a reply carries a resolved preview of its target; a dangling ref 400s
+	reply := owner.do("POST", fmt.Sprintf("/v1/channels/%d/messages", tavernID),
+		map[string]any{"content": "couldn't agree more", "reply_to": msgID}, 201)
+	if prev, ok := reply["reply_preview"].(map[string]any); !ok || int64(prev["id"].(float64)) != msgID {
+		t.Fatalf("reply preview missing/wrong: %v", reply)
+	}
+	owner.do("POST", fmt.Sprintf("/v1/channels/%d/messages", tavernID),
+		map[string]any{"content": "x", "reply_to": 999999}, 400)
+
+	// pin: members can't, owner can; the pins list reflects it
+	guest.do("POST", fmt.Sprintf("/v1/channels/%d/messages/%d/pin", tavernID, msgID), nil, 403)
+	pinned := owner.do("POST", fmt.Sprintf("/v1/channels/%d/messages/%d/pin", tavernID, msgID), nil, 200)
+	if pinned["pinned"] != true {
+		t.Fatalf("message not pinned: %v", pinned)
+	}
+	if pins := owner.do("GET", fmt.Sprintf("/v1/channels/%d/pins", tavernID), nil, 200); len(pins["messages"].([]any)) != 1 {
+		t.Fatalf("expected 1 pin, got %v", pins)
+	}
+	owner.do("DELETE", fmt.Sprintf("/v1/channels/%d/messages/%d/pin", tavernID, msgID), nil, 200)
+	if pins := owner.do("GET", fmt.Sprintf("/v1/channels/%d/pins", tavernID), nil, 200); len(pins["messages"].([]any)) != 0 {
+		t.Fatalf("expected 0 pins after unpin, got %v", pins)
+	}
+
 	// a non-author member can neither edit nor delete someone else's message
 	guest.do("PATCH", fmt.Sprintf("/v1/channels/%d/messages/%d", tavernID, msgID),
 		map[string]string{"content": "hijack"}, 403)
@@ -302,8 +326,10 @@ func TestEndToEnd(t *testing.T) {
 	// the author can delete their own; afterwards it's gone and editing 404s
 	owner.do("DELETE", fmt.Sprintf("/v1/channels/%d/messages/%d", tavernID, msgID), nil, 200)
 	gone := owner.do("GET", fmt.Sprintf("/v1/channels/%d/messages?limit=50", tavernID), nil, 200)
-	if len(gone["messages"].([]any)) != 0 {
-		t.Fatalf("message should be deleted, got %v", gone)
+	for _, m := range gone["messages"].([]any) {
+		if int64(m.(map[string]any)["id"].(float64)) == msgID {
+			t.Fatalf("message should be deleted, still present: %v", gone)
+		}
 	}
 	owner.do("PATCH", fmt.Sprintf("/v1/channels/%d/messages/%d", tavernID, msgID),
 		map[string]string{"content": "ghost"}, 404)

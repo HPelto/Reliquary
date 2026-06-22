@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import {
   BarChart2,
   Bell,
+  CornerUpRight,
   Hash,
   ImagePlus,
   LayoutGrid,
   Pin,
   Plus,
+  Reply as ReplyIcon,
   SendHorizontal,
   SmilePlus,
   Users,
@@ -22,6 +24,7 @@ import { AttachmentGrid, Lightbox } from './Attachments'
 import { KeepAvatar } from './KeepAvatar'
 import { Md } from './Markdown'
 import { MessageMenu, type MenuTarget } from './MessageMenu'
+import { PinsPanel } from './PinsPanel'
 import { StyledName } from './StyledName'
 
 function timeOf(ms: number): string {
@@ -61,8 +64,33 @@ function MessageRow({
       onContextMenu={(e) => onContextMenu(e, msg)}
       className={`msg-in group relative rounded-lg px-3 py-0.5 transition-colors duration-100 hover:bg-void-2/50 ${
         grouped ? 'mt-0.5' : 'mt-3'
-      }`}
+      } ${msg.pinned ? 'bg-gold/[0.04]' : ''}`}
     >
+      {msg.pinned && (
+        <Pin
+          size={11}
+          className="absolute right-3 top-1.5 text-gold/70"
+          aria-label="Pinned"
+        />
+      )}
+      {msg.reply_to ? (
+        <div className="mb-0.5 ml-12 flex items-center gap-1.5 text-[12px] text-lo">
+          <CornerUpRight size={12} className="shrink-0 opacity-60" />
+          {msg.reply_preview ? (
+            <>
+              <span className="shrink-0 font-medium text-mid">
+                @{msg.reply_preview.author_username}
+              </span>
+              <span className="truncate opacity-80">
+                {msg.reply_preview.content ||
+                  (msg.reply_preview.has_attachments ? '🖼 image' : '')}
+              </span>
+            </>
+          ) : (
+            <span className="italic opacity-70">original message deleted</span>
+          )}
+        </div>
+      ) : null}
       <div className="flex gap-3">
         {grouped ? (
           <span className="w-9 shrink-0 pt-1 text-right font-mono text-[9px] text-lo opacity-0 group-hover:opacity-100">
@@ -150,8 +178,11 @@ export function ChatArea(): React.JSX.Element | null {
   const [pending, setPending] = useState<PendingAttachment[]>([])
   const [uploadOpen, setUploadOpen] = useState(false)
   const [sending, setSending] = useState(false)
+  const [replyingTo, setReplyingTo] = useState<KeepMessage | null>(null)
+  const [pinsOpen, setPinsOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const pinBtnRef = useRef<HTMLButtonElement>(null)
 
   const server = servers.find((s) => s.id === activeServerId)
   const instance = server ? instances.find((i) => i.id === server.instanceId) : undefined
@@ -190,9 +221,10 @@ export function ChatArea(): React.JSX.Element | null {
     setSending(true)
     try {
       const uploaded = await Promise.all(pending.map((p) => conn.uploadAttachment(p)))
-      await conn.sendMessage(channel.id, content, uploaded)
+      await conn.sendMessage(channel.id, content, uploaded, replyingTo?.id)
       setDraft('')
       setPending([])
+      setReplyingTo(null)
     } catch {
       /* leave the draft + pending so the user can retry */
     } finally {
@@ -236,11 +268,19 @@ export function ChatArea(): React.JSX.Element | null {
           Live · self-hosted — your hardware, your rules
         </span>
         <div className="ml-auto flex items-center gap-1 text-mid">
-          {[Bell, Pin].map((Icon, i) => (
-            <button key={i} className="rounded-md p-1.5 transition-colors hover:bg-void-3 hover:text-hi">
-              <Icon size={16} />
-            </button>
-          ))}
+          <button className="rounded-md p-1.5 transition-colors hover:bg-void-3 hover:text-hi">
+            <Bell size={16} />
+          </button>
+          <button
+            ref={pinBtnRef}
+            onClick={() => setPinsOpen((v) => !v)}
+            className={`rounded-md p-1.5 transition-colors hover:bg-void-3 hover:text-hi ${
+              pinsOpen ? 'bg-void-3 text-hi' : ''
+            }`}
+            title="Pinned messages"
+          >
+            <Pin size={16} />
+          </button>
           <button
             onClick={toggleMembers}
             className="rounded-md p-1.5 transition-colors hover:bg-void-3 hover:text-hi"
@@ -312,6 +352,21 @@ export function ChatArea(): React.JSX.Element | null {
       {/* composer */}
       <div className="shrink-0 px-4 pb-4">
         <div className="mx-auto max-w-[860px]">
+          {replyingTo && (
+            <div className="mb-2 flex items-center gap-2 rounded-xl border border-edge bg-void-2 px-3 py-1.5 text-[12px] text-mid">
+              <ReplyIcon size={13} className="text-[var(--accent)]" />
+              <span>
+                Replying to <span className="font-medium text-hi">{replyingTo.author.username}</span>
+              </span>
+              <button
+                onClick={() => setReplyingTo(null)}
+                className="ml-auto text-lo transition-colors hover:text-ember"
+                title="Cancel reply"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
           {pending.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-2 rounded-xl border border-edge bg-void-2 p-2">
               {pending.map((p, i) => (
@@ -409,9 +464,29 @@ export function ChatArea(): React.JSX.Element | null {
           target={menu}
           canEdit={!!self && menu.msg.author.id === self.id}
           canDelete={!!self && (menu.msg.author.id === self.id || canManage)}
+          canPin={canManage}
+          onReply={() => setReplyingTo(menu.msg)}
           onEdit={() => setEditingId(menu.msg.id)}
+          onPin={() =>
+            void getKeep(server.instanceId)
+              ?.pinMessage(menu.msg.channel_id, menu.msg.id, !menu.msg.pinned)
+              .catch(() => {})
+          }
           onDelete={() => doDelete(menu.msg)}
           onClose={() => setMenu(null)}
+        />
+      )}
+
+      {pinsOpen && channel && (
+        <PinsPanel
+          instanceId={server.instanceId}
+          channelId={channel.id}
+          canManage={canManage}
+          anchor={(() => {
+            const r = pinBtnRef.current?.getBoundingClientRect()
+            return { right: r ? window.innerWidth - r.right : 16, top: r ? r.bottom + 8 : 52 }
+          })()}
+          onClose={() => setPinsOpen(false)}
         />
       )}
 
