@@ -9,6 +9,8 @@ keep/*.exe~
 # SQLite databases — generated on first launch, unique per server, never committed
 *.db
 *.db-*
+# media blobs the Keep stores on disk next to its db (runtime data)
+media/
 # TypeScript incremental build info
 *.tsbuildinfo
 # local editor / agent config (settings.local.json etc.)
