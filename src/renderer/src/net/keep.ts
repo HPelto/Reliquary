@@ -467,21 +467,16 @@ export class KeepConnection {
   }
 
   /** Ensure a picked file's bytes are on this Keep (streamed, any type), then
-   *  return its wire metadata. */
-  async uploadAttachment(p: PendingAttachment): Promise<Attachment> {
-    if (!(await this.mediaExists(p.hash))) {
-      const res = await fetch(`${this.baseUrl}/v1/media/${p.hash}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': p.contentType,
-          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {})
-        },
-        body: p.file
-      })
-      if (!res.ok && res.status !== 409) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string }
-        throw new KeepError(body.error ?? `upload failed (${res.status})`, res.status)
-      }
+   *  return its wire metadata. `onProgress` reports bytes uploaded for this file
+   *  so the UI can show a progress bar on large files. */
+  async uploadAttachment(
+    p: PendingAttachment,
+    onProgress?: (loaded: number) => void
+  ): Promise<Attachment> {
+    if (await this.mediaExists(p.hash)) {
+      onProgress?.(p.size) // already on the Keep — nothing to upload
+    } else {
+      await this.putMediaWithProgress(p.hash, p.contentType, p.file, onProgress)
     }
     return {
       hash: p.hash,
@@ -491,6 +486,40 @@ export class KeepConnection {
       height: p.height,
       size: p.size
     }
+  }
+
+  /** PUT raw bytes with upload-progress events (fetch can't report these). */
+  private putMediaWithProgress(
+    hash: string,
+    contentType: string,
+    file: Blob,
+    onProgress?: (loaded: number) => void
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('PUT', `${this.baseUrl}/v1/media/${hash}`)
+      xhr.setRequestHeader('Content-Type', contentType)
+      if (this.token) xhr.setRequestHeader('Authorization', `Bearer ${this.token}`)
+      xhr.upload.onprogress = (e): void => {
+        if (e.lengthComputable) onProgress?.(e.loaded)
+      }
+      xhr.onload = (): void => {
+        if (xhr.status < 300 || xhr.status === 409) {
+          onProgress?.(file.size)
+          resolve()
+        } else {
+          let msg = `upload failed (${xhr.status})`
+          try {
+            msg = (JSON.parse(xhr.responseText) as { error?: string }).error ?? msg
+          } catch {
+            /* non-JSON error body */
+          }
+          reject(new KeepError(msg, xhr.status))
+        }
+      }
+      xhr.onerror = (): void => reject(new KeepError('upload failed — network error'))
+      xhr.send(file)
+    })
   }
 
   /** Owner only. ttlSeconds: 0 = server default (7d), -1 = never expires. */

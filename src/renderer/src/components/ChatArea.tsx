@@ -7,6 +7,7 @@ import {
   Hash,
   ImagePlus,
   LayoutGrid,
+  Loader2,
   Pin,
   Plus,
   Reply as ReplyIcon,
@@ -201,6 +202,7 @@ export function ChatArea(): React.JSX.Element | null {
   const [pending, setPending] = useState<PendingAttachment[]>([])
   const [uploadOpen, setUploadOpen] = useState(false)
   const [sending, setSending] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [attachError, setAttachError] = useState<string | null>(null)
   const [replyingTo, setReplyingTo] = useState<KeepMessage | null>(null)
   const [pinsOpen, setPinsOpen] = useState(false)
@@ -247,8 +249,21 @@ export function ChatArea(): React.JSX.Element | null {
     const conn = getKeep(server.instanceId)
     if (!conn) return
     setSending(true)
+    const total = pending.reduce((n, p) => n + p.size, 0)
+    setUploadProgress(pending.length > 0 ? 0 : null)
     try {
-      const uploaded = await Promise.all(pending.map((p) => conn.uploadAttachment(p)))
+      // Upload sequentially so progress is meaningful and we don't hold several
+      // huge files in flight at once. The message is posted only after every
+      // attachment is on the Keep, so it goes live exactly when it's ready.
+      const uploaded: Attachment[] = []
+      let base = 0
+      for (const p of pending) {
+        const a = await conn.uploadAttachment(p, (loaded) => {
+          if (total > 0) setUploadProgress(Math.min(1, (base + loaded) / total))
+        })
+        base += p.size
+        uploaded.push(a)
+      }
       await conn.sendMessage(channel.id, content, uploaded, replyingTo?.id)
       setDraft('')
       pending.forEach((p) => p.previewUrl && URL.revokeObjectURL(p.previewUrl))
@@ -258,6 +273,7 @@ export function ChatArea(): React.JSX.Element | null {
       /* leave the draft + pending so the user can retry */
     } finally {
       setSending(false)
+      setUploadProgress(null)
     }
   }
 
@@ -448,6 +464,20 @@ export function ChatArea(): React.JSX.Element | null {
       {/* composer */}
       <div className="shrink-0 px-4 pb-4">
         <div className="mx-auto max-w-[860px]">
+          {uploadProgress !== null && (
+            <div className="mb-2 flex items-center gap-2.5 rounded-lg border border-edge bg-void-2 px-3 py-2">
+              <Loader2 size={14} className="shrink-0 animate-spin text-[var(--accent)]" />
+              <span className="shrink-0 text-[12px] text-mid">
+                Uploading… {Math.round(uploadProgress * 100)}%
+              </span>
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-void-3">
+                <div
+                  className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-150"
+                  style={{ width: `${Math.round(uploadProgress * 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
           {attachError && (
             <div className="mb-2 rounded-lg border border-ember/40 bg-ember/10 px-3 py-1.5 text-[12px] text-ember">
               {attachError}
