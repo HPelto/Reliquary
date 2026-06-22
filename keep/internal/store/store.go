@@ -15,6 +15,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -129,7 +131,8 @@ type Event struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db       *sql.DB
+	mediaDir string
 }
 
 func Open(path string) (*Store, error) {
@@ -142,11 +145,57 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;`); err != nil {
 		return nil, err
 	}
-	s := &Store{db: db}
+	// media bytes live on disk next to the DB so large files stream (Range) from
+	// the OS instead of loading the whole blob into memory per request.
+	mediaDir := filepath.Join(filepath.Dir(path), "media")
+	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
+		return nil, err
+	}
+	s := &Store{db: db, mediaDir: mediaDir}
 	if err := s.migrate(); err != nil {
 		return nil, err
 	}
+	s.migrateMediaToDisk() // best-effort: move legacy blob media to disk files
 	return s, nil
+}
+
+// migrateMediaToDisk moves any media still stored as a SQLite blob onto disk
+// (one-time) so it streams like new uploads, then empties the blob to reclaim
+// space. Best-effort — failures for a single item are skipped, never fatal.
+func (s *Store) migrateMediaToDisk() {
+	rows, err := s.db.Query(`SELECT hash FROM media WHERE length(bytes) > 0`)
+	if err != nil {
+		return
+	}
+	var hashes []string
+	for rows.Next() {
+		var h string
+		if rows.Scan(&h) == nil {
+			hashes = append(hashes, h)
+		}
+	}
+	rows.Close() // close before per-item queries — modernc sqlite is single-conn
+
+	for _, h := range hashes {
+		dst := filepath.Join(s.mediaDir, h)
+		if _, statErr := os.Stat(dst); statErr == nil {
+			s.db.Exec(`UPDATE media SET bytes = ? WHERE hash = ?`, []byte{}, h) // already on disk
+			continue
+		}
+		var data []byte
+		if s.db.QueryRow(`SELECT bytes FROM media WHERE hash = ?`, h).Scan(&data) != nil || len(data) == 0 {
+			continue
+		}
+		tmp := dst + ".tmp"
+		if os.WriteFile(tmp, data, 0o644) != nil {
+			continue
+		}
+		if os.Rename(tmp, dst) != nil {
+			os.Remove(tmp)
+			continue
+		}
+		s.db.Exec(`UPDATE media SET bytes = ? WHERE hash = ?`, []byte{}, h)
+	}
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -287,13 +336,25 @@ func nowMS() int64 { return time.Now().UnixMilli() }
 
 // ── media (avatars, backgrounds) ────────────────────────────────────
 
-// PutMedia stores content-addressed bytes; re-uploading the same content
-// is a no-op. Returns nothing new — the caller already knows the hash.
+// PutMedia stores content-addressed bytes on disk (content-addressed → a repeat
+// upload is a no-op) and records metadata in the DB. The bytes column is left
+// empty for these disk-backed entries; they're served from the file.
 func (s *Store) PutMedia(hash, contentType string, data []byte) error {
+	dst := filepath.Join(s.mediaDir, hash)
+	if _, statErr := os.Stat(dst); statErr != nil {
+		tmp := dst + ".tmp"
+		if err := os.WriteFile(tmp, data, 0o644); err != nil {
+			return err
+		}
+		if err := os.Rename(tmp, dst); err != nil {
+			os.Remove(tmp)
+			return err
+		}
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO media (hash, content_type, size, bytes, created_at)
 		 VALUES (?, ?, ?, ?, ?) ON CONFLICT(hash) DO NOTHING`,
-		hash, contentType, len(data), data, nowMS(),
+		hash, contentType, len(data), []byte{}, nowMS(),
 	)
 	return err
 }
@@ -307,6 +368,23 @@ func (s *Store) MediaExists(hash string) (bool, error) {
 	return err == nil, err
 }
 
+// MediaFilePath is where a disk-backed media blob lives (may not exist for media
+// uploaded before disk storage — those fall back to GetMedia).
+func (s *Store) MediaFilePath(hash string) string {
+	return filepath.Join(s.mediaDir, hash)
+}
+
+// MediaContentType returns just the stored MIME type. ErrNotFound if unknown.
+func (s *Store) MediaContentType(hash string) (string, error) {
+	var ct string
+	err := s.db.QueryRow(`SELECT content_type FROM media WHERE hash = ?`, hash).Scan(&ct)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return ct, err
+}
+
+// GetMedia returns the bytes for older blob-backed media (pre-disk storage).
 func (s *Store) GetMedia(hash string) (contentType string, data []byte, err error) {
 	err = s.db.QueryRow(`SELECT content_type, bytes FROM media WHERE hash = ?`, hash).
 		Scan(&contentType, &data)

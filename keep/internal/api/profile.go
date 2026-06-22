@@ -13,6 +13,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -121,7 +122,8 @@ func (s *Server) handleUploadMedia(w http.ResponseWriter, r *http.Request) {
 // handleGetMedia serves media bytes. Public and immutable (content-
 // addressed) so <img src> loads it without auth and caches forever.
 func (s *Server) handleGetMedia(w http.ResponseWriter, r *http.Request) {
-	contentType, data, err := s.st.GetMedia(chi.URLParam(r, "hash"))
+	hash := chi.URLParam(r, "hash")
+	contentType, err := s.st.MediaContentType(hash)
 	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "no such media", http.StatusNotFound)
 		return
@@ -134,10 +136,29 @@ func (s *Server) handleGetMedia(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	// ?download=<name> forces a save with that filename; without it media is
-	// inline so <img>/<video>/<audio> render it. ServeContent adds Range support
-	// (so video/audio can seek) and conditional-GET handling.
+	// inline so <img>/<video>/<audio> render it.
 	if name := r.URL.Query().Get("download"); name != "" {
 		w.Header().Set("Content-Disposition", `attachment; filename="`+sanitizeFilename(name)+`"`)
+	}
+
+	// Disk-backed (current media): ServeContent streams only the requested byte
+	// range straight from the file, so seeking a large video doesn't re-read the
+	// whole thing into memory.
+	if f, ferr := os.Open(s.st.MediaFilePath(hash)); ferr == nil {
+		defer f.Close()
+		var mod time.Time
+		if fi, _ := f.Stat(); fi != nil {
+			mod = fi.ModTime()
+		}
+		http.ServeContent(w, r, "", mod, f)
+		return
+	}
+
+	// Fallback: media uploaded before disk storage still lives as a SQLite blob.
+	_, data, gerr := s.st.GetMedia(hash)
+	if gerr != nil {
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
 	}
 	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
 }
