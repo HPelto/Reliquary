@@ -238,6 +238,19 @@ input:disabled,
   animation: slide-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/* flash a message when jumped to (from a reply preview or a pin), then fade */
+@keyframes msg-flash {
+  0% {
+    background-color: color-mix(in srgb, var(--accent) 26%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.msg-flash {
+  animation: msg-flash 1.8s ease-out;
+}
+
 /* ── scrollbars ────────────────────────────────────────────── */
 .scroll-thin {
   scrollbar-width: thin;

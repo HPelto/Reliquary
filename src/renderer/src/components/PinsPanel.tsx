@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Pin, PinOff, X } from 'lucide-react'
 import { getKeep } from '@/net/bind'
 import type { KeepMessage } from '@/net/keep'
+import { KeepAvatar } from './KeepAvatar'
 
 /** Popover listing a channel's pinned messages, opened from the header pin
  *  icon. Managers can unpin from here. Fetched fresh each open. */
@@ -11,12 +12,14 @@ export function PinsPanel({
   channelId,
   canManage,
   anchor,
+  onJump,
   onClose
 }: {
   instanceId: string
   channelId: number
   canManage: boolean
   anchor: { right: number; top: number }
+  onJump: (id: number) => void
   onClose: () => void
 }): React.JSX.Element {
   const [pins, setPins] = useState<KeepMessage[] | null>(null)
@@ -70,22 +73,45 @@ export function PinsPanel({
           </p>
         ) : (
           pins.map((m) => (
-            <div key={m.id} className="group/pin rounded-lg p-2 transition-colors hover:bg-void-3">
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="truncate text-[12px] font-semibold text-hi">{m.author.username}</span>
-                {canManage && (
-                  <button
-                    onClick={() => unpin(m.id)}
-                    className="shrink-0 text-lo opacity-0 transition group-hover/pin:opacity-100 hover:text-ember"
-                    title="Unpin"
-                  >
-                    <PinOff size={13} />
-                  </button>
-                )}
+            <div
+              key={m.id}
+              onClick={() => {
+                onJump(m.id)
+                onClose()
+              }}
+              className="group/pin flex cursor-pointer gap-2.5 rounded-lg p-2 transition-colors hover:bg-void-3"
+            >
+              <div className="mt-0.5 shrink-0">
+                <KeepAvatar
+                  instanceId={instanceId}
+                  avatar={m.author.avatar}
+                  name={m.author.username}
+                  accent={m.author.accent}
+                  size={28}
+                />
               </div>
-              <p className="mt-0.5 line-clamp-3 text-[12.5px] break-words text-mid">
-                {m.content || (m.attachments && m.attachments.length > 0 ? '🖼 image' : '')}
-              </p>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="truncate text-[12px] font-semibold text-hi">
+                    {m.author.username}
+                  </span>
+                  {canManage && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        unpin(m.id)
+                      }}
+                      className="shrink-0 text-lo opacity-0 transition group-hover/pin:opacity-100 hover:text-ember"
+                      title="Unpin"
+                    >
+                      <PinOff size={13} />
+                    </button>
+                  )}
+                </div>
+                <p className="mt-0.5 line-clamp-3 text-[12.5px] break-words text-mid">
+                  {m.content || (m.attachments && m.attachments.length > 0 ? '🖼 image' : '')}
+                </p>
+              </div>
             </div>
           ))
         )}

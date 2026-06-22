@@ -31,26 +31,42 @@ function timeOf(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
+/** Timeline stamp: time only for recent messages, full date once it's a day old. */
+function stampOf(ms: number): string {
+  const time = timeOf(ms)
+  if (Date.now() - ms < 24 * 60 * 60 * 1000) return time
+  const date = new Date(ms).toLocaleDateString([], {
+    month: 'numeric',
+    day: 'numeric',
+    year: 'numeric'
+  })
+  return `${date}, ${time}`
+}
+
 function MessageRow({
   msg,
   grouped,
   instanceId,
   locked,
   editing,
+  highlighted,
   onContextMenu,
   onEditSubmit,
   onEditCancel,
-  onOpenLightbox
+  onOpenLightbox,
+  onJump
 }: {
   msg: KeepMessage
   grouped: boolean
   instanceId: string
   locked: boolean
   editing: boolean
+  highlighted: boolean
   onContextMenu: (e: React.MouseEvent, msg: KeepMessage) => void
   onEditSubmit: (msg: KeepMessage, content: string) => void
   onEditCancel: () => void
   onOpenLightbox: (items: Attachment[], index: number) => void
+  onJump: (id: number) => void
 }): React.JSX.Element {
   const a = msg.author
   const viewUser = useUi((s) => s.viewUser)
@@ -61,10 +77,11 @@ function MessageRow({
 
   return (
     <div
+      id={`msg-${msg.id}`}
       onContextMenu={(e) => onContextMenu(e, msg)}
       className={`msg-in group relative rounded-lg px-3 py-0.5 transition-colors duration-100 hover:bg-void-2/50 ${
         grouped ? 'mt-0.5' : 'mt-3'
-      } ${msg.pinned ? 'bg-gold/[0.04]' : ''}`}
+      } ${msg.pinned ? 'bg-gold/[0.04]' : ''} ${highlighted ? 'msg-flash' : ''}`}
     >
       {msg.pinned && (
         <Pin
@@ -74,7 +91,11 @@ function MessageRow({
         />
       )}
       {msg.reply_to ? (
-        <div className="mb-0.5 ml-12 flex items-center gap-1.5 text-[12px] text-lo">
+        <button
+          onClick={() => msg.reply_preview && onJump(msg.reply_to as number)}
+          disabled={!msg.reply_preview}
+          className="mb-0.5 ml-12 flex max-w-full items-center gap-1.5 text-[12px] text-lo enabled:hover:text-mid disabled:cursor-default"
+        >
           <CornerUpRight size={12} className="shrink-0 opacity-60" />
           {msg.reply_preview ? (
             <>
@@ -89,7 +110,7 @@ function MessageRow({
           ) : (
             <span className="italic opacity-70">original message deleted</span>
           )}
-        </div>
+        </button>
       ) : null}
       <div className="flex gap-3">
         {grouped ? (
@@ -114,7 +135,7 @@ function MessageRow({
                 style={{ cursor: 'pointer' }}
               />
               {a.role === 'owner' && <span className="text-[10px] text-gold">♛</span>}
-              <span className="font-mono text-[10px] text-lo">{timeOf(msg.created_at)}</span>
+              <span className="font-mono text-[10px] text-lo">{stampOf(msg.created_at)}</span>
             </div>
           )}
           {editing ? (
@@ -180,6 +201,7 @@ export function ChatArea(): React.JSX.Element | null {
   const [sending, setSending] = useState(false)
   const [replyingTo, setReplyingTo] = useState<KeepMessage | null>(null)
   const [pinsOpen, setPinsOpen] = useState(false)
+  const [highlightId, setHighlightId] = useState<number | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const pinBtnRef = useRef<HTMLButtonElement>(null)
@@ -257,6 +279,18 @@ export function ChatArea(): React.JSX.Element | null {
     void getKeep(server.instanceId)?.deleteMessage(msg.channel_id, msg.id).catch(() => {})
   }
 
+  // scroll a message into view and flash it (from a reply preview or a pin)
+  const jumpTo = (id: number): void => {
+    const el = document.getElementById(`msg-${id}`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setHighlightId(null)
+    requestAnimationFrame(() => {
+      setHighlightId(id)
+      window.setTimeout(() => setHighlightId((h) => (h === id ? null : h)), 1800)
+    })
+  }
+
   return (
     <main className="relative z-10 flex min-w-0 flex-1 flex-col bg-void-2/40">
       {/* channel header */}
@@ -329,6 +363,7 @@ export function ChatArea(): React.JSX.Element | null {
                     instanceId={server.instanceId}
                     locked={!!keep?.world?.lock_name_style}
                     editing={editingId === m.id}
+                    highlighted={highlightId === m.id}
                     onContextMenu={(e, msg) => {
                       e.preventDefault()
                       setMenu({ msg, x: e.clientX, y: e.clientY })
@@ -336,6 +371,7 @@ export function ChatArea(): React.JSX.Element | null {
                     onEditSubmit={submitEdit}
                     onEditCancel={() => setEditingId(null)}
                     onOpenLightbox={(items, index) => setLightbox({ items, index })}
+                    onJump={jumpTo}
                     grouped={
                       i > 0 &&
                       msgs[i - 1].author.id === m.author.id &&
@@ -486,6 +522,7 @@ export function ChatArea(): React.JSX.Element | null {
             const r = pinBtnRef.current?.getBoundingClientRect()
             return { right: r ? window.innerWidth - r.right : 16, top: r ? r.bottom + 8 : 52 }
           })()}
+          onJump={jumpTo}
           onClose={() => setPinsOpen(false)}
         />
       )}
