@@ -283,22 +283,23 @@ export function ChatArea(): React.JSX.Element | null {
     }
   }
 
-  const onFiles = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
-    const files = Array.from(e.target.files ?? [])
-    e.target.value = ''
+  // shared by the file picker and clipboard paste — stages any files as pending
+  // attachments (same path, so pasted files behave exactly like attached ones).
+  const addFiles = async (files: File[]): Promise<void> => {
+    if (files.length === 0) return
     const limitMb = keep?.world?.max_upload_mb ?? 100
     const limitBytes = limitMb * 1024 * 1024
     const added: PendingAttachment[] = []
     const rejected: string[] = []
     for (const f of files) {
       if (f.size > limitBytes) {
-        rejected.push(f.name)
+        rejected.push(f.name || 'pasted file')
         continue
       }
       try {
         added.push(await fileToPendingAttachment(f))
       } catch {
-        rejected.push(f.name)
+        rejected.push(f.name || 'pasted file')
       }
     }
     if (rejected.length > 0) {
@@ -306,6 +307,31 @@ export function ChatArea(): React.JSX.Element | null {
       window.setTimeout(() => setAttachError(null), 6000)
     }
     setPending((p) => [...p, ...added].slice(0, 10))
+  }
+
+  const onFiles = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = ''
+    await addFiles(files)
+  }
+
+  // Paste files/images straight from the clipboard. Each paste appends (no
+  // dedup), so pasting the same snip twice attaches it twice.
+  const onPaste = (e: React.ClipboardEvent): void => {
+    const files: File[] = []
+    for (const item of e.clipboardData.items) {
+      if (item.kind === 'file') {
+        const f = item.getAsFile()
+        if (f) files.push(f)
+      }
+    }
+    if (files.length === 0) {
+      for (const f of Array.from(e.clipboardData.files)) files.push(f)
+    }
+    if (files.length > 0) {
+      e.preventDefault() // don't also paste the file path as text
+      void addFiles(files)
+    }
   }
 
   const removePending = (i: number): void => {
@@ -577,6 +603,7 @@ export function ChatArea(): React.JSX.Element | null {
             <input
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              onPaste={onPaste}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
