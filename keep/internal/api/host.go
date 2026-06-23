@@ -407,6 +407,19 @@ func (s *Server) handleHostUPnP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": req.Enabled})
 }
 
+// handleHostUpdateLicense returns the license text of the latest release so the
+// host console can require the owner to read + accept it before applying an
+// update. Best-effort: a fetch failure comes back as {error} so the console can
+// fall back rather than block.
+func (s *Server) handleHostUpdateLicense(w http.ResponseWriter, r *http.Request) {
+	text, err := update.FetchLicense(update.Repo)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"license": text})
+}
+
 // handleHostRescueInvite mints an invite from the host GUI — the "add a
 // user" path for when someone lost their client identity.
 func (s *Server) handleHostRescueInvite(w http.ResponseWriter, r *http.Request) {

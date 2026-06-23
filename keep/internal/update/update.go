@@ -156,6 +156,17 @@ func fetchManifest(repo string) (Manifest, error) {
 	return m, nil
 }
 
+// FetchLicense returns the LICENSE text published with the latest release, so
+// the host console can show exactly what a user is updating to and require
+// acceptance before the update is applied.
+func FetchLicense(repo string) (string, error) {
+	b, err := download(fmt.Sprintf(assetURLFmt, repo, "LICENSE"))
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
 func download(url string) ([]byte, error) {
 	resp, err := httpClient.Get(url)
 	if err != nil {

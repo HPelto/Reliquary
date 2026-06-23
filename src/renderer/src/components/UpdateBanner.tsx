@@ -12,11 +12,13 @@ import { useEffect, useState } from 'react'
 import { Sparkles, X } from 'lucide-react'
 import { getUpdatePrefs, setUpdatePrefs, type UpdatePrefs } from '@/lib/updatePrefs'
 import { useUi } from '@/store'
+import { LicenseGate } from './LicenseGate'
 
 export function UpdateBanner(): React.JSX.Element | null {
   const update = useUi((s) => s.update)
   const [prefs, setPrefs] = useState<UpdatePrefs>(getUpdatePrefs)
   const [now, setNow] = useState(() => Date.now())
+  const [gateOpen, setGateOpen] = useState(false)
 
   const version = update.version ?? ''
   const ready = update.status === 'update-downloaded' && version !== ''
@@ -44,13 +46,23 @@ export function UpdateBanner(): React.JSX.Element | null {
 
   return (
     <div className="flex items-center gap-3 border-b border-relic/30 bg-relic/10 px-4 py-2 text-[12.5px]">
+      {gateOpen && (
+        <LicenseGate
+          version={version}
+          onAccept={() => {
+            setGateOpen(false)
+            void window.reliquary.installUpdate()
+          }}
+          onCancel={() => setGateOpen(false)}
+        />
+      )}
       <Sparkles size={14} className="shrink-0 text-relic" />
       <span className="min-w-0 truncate text-hi">
         Reliquary <span className="font-semibold">v{version}</span> is ready to install.
       </span>
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
         <button
-          onClick={() => void window.reliquary.installUpdate()}
+          onClick={() => setGateOpen(true)}
           className="rounded-md bg-relic px-3 py-1 text-[12px] font-semibold text-void-0 transition-all duration-150 hover:shadow-[0_0_16px_rgba(139,124,246,0.45)]"
         >
           Update now

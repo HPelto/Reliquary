@@ -209,6 +209,7 @@ func New(st *store.Store, hub *gateway.Hub, cfg Config) *Server {
 				r.Post("/restart", s.handleHostRestart)
 				r.Post("/update-restart", s.handleHostUpdateRestart)
 				r.Get("/check-updates", s.handleHostCheckUpdates)
+				r.Get("/update-license", s.handleHostUpdateLicense)
 				r.Post("/upnp", s.handleHostUPnP)
 			})
 		})

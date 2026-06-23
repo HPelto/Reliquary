@@ -186,6 +186,21 @@ app.whenReady().then(() => {
   ipcMain.handle('update:install', () => {
     if (app.isPackaged) autoUpdater.quitAndInstall()
   })
+  // Fetch the LICENSE for a specific release so the renderer can require the user
+  // to read + accept it before installing that update. Fetched in main to avoid
+  // the renderer's CSP. Declining simply means the update isn't installed.
+  ipcMain.handle('update:license', async (_e, version?: string) => {
+    const url = version
+      ? `https://github.com/HPelto/Reliquary/releases/download/v${version}/LICENSE`
+      : `https://github.com/HPelto/Reliquary/releases/latest/download/LICENSE`
+    try {
+      const res = await fetch(url, { redirect: 'follow' })
+      if (!res.ok) return { error: `HTTP ${res.status}` }
+      return { text: await res.text() }
+    } catch (e) {
+      return { error: String((e as Error)?.message ?? e) }
+    }
+  })
   ipcMain.handle('window:minimize', (e) => BrowserWindow.fromWebContents(e.sender)?.minimize())
   ipcMain.handle('window:toggle-maximize', (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)

@@ -34,6 +34,13 @@
   details.upnp-warn summary::-webkit-details-marker { color:var(--ember); }
   details.upnp-warn[open] summary { border-bottom:1px solid rgba(255,107,129,.2); }
   .upnp-warn-body { padding:10px 12px 11px; font-size:12px; color:var(--ember); line-height:1.55; }
+  .modal-overlay { position:fixed; inset:0; background:rgba(4,5,8,.72); backdrop-filter:blur(3px); z-index:200; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .modal { width:100%; max-width:560px; max-height:84vh; display:flex; flex-direction:column; background:var(--void-1); border:1px solid var(--edge); border-radius:14px; padding:18px; }
+  .modal h3 { font-size:15px; color:var(--hi); font-weight:600; }
+  .license-scroll { flex:1; min-height:160px; margin-top:12px; background:var(--void-0); border:1px solid var(--edge); border-radius:10px; padding:12px 14px; overflow-y:auto; white-space:pre-wrap; font-family:ui-monospace,monospace; font-size:11px; line-height:1.6; color:var(--mid); }
+  .license-agree { display:flex; align-items:flex-start; gap:9px; margin-top:11px; font-size:12.5px; color:var(--hi); line-height:1.4; cursor:pointer; }
+  .license-agree input { width:15px; height:15px; flex:none; margin-top:1px; accent-color:var(--relic); cursor:pointer; }
+  .license-agree input:disabled { opacity:.5; cursor:default; }
   .pill { font-size:10px; padding:2px 7px; border-radius:99px; border:1px solid var(--edge); color:var(--mid); }
   .pill.owner { color:var(--gold); border-color:rgba(232,201,122,.35); background:rgba(232,201,122,.08); }
   .pill.on { color:var(--pulse); border-color:rgba(61,220,196,.35); background:rgba(61,220,196,.08); }
@@ -225,6 +232,20 @@
       <span class="note" style="align-self:center;margin-top:0">takes effect on restart</span>
     </div>
     <div class="err" id="tlsErr"></div>
+  </div>
+</div>
+
+<div id="licenseModal" class="modal-overlay hidden">
+  <div class="modal">
+    <h3>Review the license before updating</h3>
+    <div class="note" style="margin-top:4px">This is the license for the version you're about to install. You can keep running your current version if you don't agree — you won't be locked out.</div>
+    <div id="licenseScroll" class="license-scroll"></div>
+    <div class="note" id="licenseHint" style="margin-top:6px">Scroll to the bottom of the license to continue.</div>
+    <label class="license-agree"><input type="checkbox" id="licenseAgree" disabled> <span>I have read and agree to this license.</span></label>
+    <div class="bar" style="margin-top:14px;justify-content:flex-end;gap:10px">
+      <button class="ghost" id="licenseCancel">Cancel</button>
+      <button id="licenseAccept" disabled>Agree &amp; update</button>
+    </div>
   </div>
 </div>
 
@@ -460,11 +481,50 @@ async function restartServer() {
   waitForBackUp(btn, 'Restarting — rebuilding and coming back up…')
 }
 
+// Shows the license modal; resolves true only if the owner scrolls through and
+// agrees. Declining leaves them on their current (already-licensed) version.
+function licenseGate(text) {
+  return new Promise((resolve) => {
+    const box = $('licenseScroll'), agree = $('licenseAgree'), accept = $('licenseAccept'), hint = $('licenseHint')
+    box.textContent = text
+    box.scrollTop = 0
+    agree.checked = false; agree.disabled = true; accept.disabled = true
+    hint.style.display = ''
+    $('licenseModal').classList.remove('hidden')
+    const onScroll = () => {
+      if (box.scrollTop + box.clientHeight >= box.scrollHeight - 8) {
+        agree.disabled = false; hint.style.display = 'none'
+        box.removeEventListener('scroll', onScroll)
+      }
+    }
+    box.addEventListener('scroll', onScroll)
+    if (box.scrollHeight <= box.clientHeight + 8) onScroll()
+    agree.onchange = () => { accept.disabled = !agree.checked }
+    const close = (ok) => {
+      $('licenseModal').classList.add('hidden')
+      box.removeEventListener('scroll', onScroll)
+      resolve(ok)
+    }
+    accept.onclick = () => close(true)
+    $('licenseCancel').onclick = () => close(false)
+  })
+}
+
 async function updateServer() {
-  if (!confirm('Update & Restart? This installs the latest version, then restarts — a few seconds of downtime.')) return
   const btn = $('updateBtn')
   btn.disabled = true
+  $('restartMsg').style.color = 'var(--lo)'
+  $('restartMsg').textContent = 'Fetching the latest license…'
+  let text
+  try {
+    const r = await api('/v1/host/update-license')
+    text = r.license || `Couldn't load the license to display. Review it at\nhttps://polyformproject.org/licenses/noncommercial/1.0.0\nbefore continuing.${r.error ? '\n\n(' + r.error + ')' : ''}`
+  } catch (e) {
+    text = `Couldn't load the license to display. Review it at\nhttps://polyformproject.org/licenses/noncommercial/1.0.0 before continuing.`
+  }
   $('restartMsg').textContent = ''
+  const agreed = await licenseGate(text)
+  if (!agreed) { btn.disabled = false; return } // declined — stays on the current version
   try {
     await api('/v1/host/update-restart', { method: 'POST' })
   } catch (e) {
@@ -473,7 +533,7 @@ async function updateServer() {
     $('restartMsg').textContent = e.message
     return
   }
-  waitForBackUp(btn, 'Updating — pulling latest, rebuilding, coming back up…')
+  waitForBackUp(btn, 'Updating — installing latest, coming back up…')
 }
 
 async function checkUpdates() {

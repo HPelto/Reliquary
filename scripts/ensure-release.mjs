@@ -136,3 +136,6 @@ await uploadAsset(new URL('../installation_File/ReliquarySetup.exe', import.meta
 // keep-latest.json must be present for running Keeps to discover this release.
 await uploadAsset(new URL('../dist/Keep-Portable-Windows.zip', import.meta.url), 'Keep-Portable-Windows.zip')
 await uploadAsset(new URL('../dist/keep-latest.json', import.meta.url), 'keep-latest.json')
+// the LICENSE for THIS release, so the client + Keep can show the exact license a
+// user is updating to and require acceptance before applying the update.
+await uploadAsset(new URL('../LICENSE', import.meta.url), 'LICENSE')

@@ -26,6 +26,8 @@ const api = {
   checkForUpdates: (): Promise<{ disabled?: boolean; ok?: boolean; version?: string; error?: string }> =>
     ipcRenderer.invoke('update:check'),
   installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
+  fetchUpdateLicense: (version?: string): Promise<{ text?: string; error?: string }> =>
+    ipcRenderer.invoke('update:license', version),
   onUpdateEvent: (cb: (payload: UpdateEvent) => void): (() => void) => {
     const listener = (_: unknown, payload: UpdateEvent): void => cb(payload)
     ipcRenderer.on('update:event', listener)
