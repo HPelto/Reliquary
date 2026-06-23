@@ -1,6 +1,6 @@
 /**
  * Username styling — fonts + effects, synced across Keeps like the rest of a
- * profile. All fonts are open-source (OFL). Effects render statically by
+ * profile. All fonts are OFL-licensed. Effects render statically by
  * default and only animate on "spotlight" surfaces (message hover, the hover
  * card, the profile modal) so the member list never strobes.
  */

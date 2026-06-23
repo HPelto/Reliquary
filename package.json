@@ -4,6 +4,7 @@
   "description": "Reliquary — your worlds, your servers, your relic. A gaming-first, self-hostable communication client.",
   "main": "./out/main/index.js",
   "author": "Reliquary",
+  "license": "CC-BY-NC-4.0",
   "private": true,
   "scripts": {
     "dev": "electron-vite dev",
