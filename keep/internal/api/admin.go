@@ -37,6 +37,7 @@ const SettingTLSCertPath = "tls_cert_path"
 const SettingTLSKeyPath = "tls_key_path"
 const SettingMaxUploadMB = "max_upload_mb"
 const SettingVoicePort = "voice_port"
+const SettingUPnPEnabled = "upnp_enabled"
 
 const defaultVoicePort = 7011 // matches the -voice-port flag default
 

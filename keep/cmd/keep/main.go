@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 
 	"reliquary.gg/keep/internal/api"
 	"reliquary.gg/keep/internal/gateway"
+	"reliquary.gg/keep/internal/netmap"
 	"reliquary.gg/keep/internal/store"
 	"reliquary.gg/keep/internal/update"
 	"reliquary.gg/keep/internal/voice"
@@ -52,6 +54,15 @@ func superviseSelf() {
 	}
 }
 
+// portOf extracts the port from a listen address like ":7777" or "0.0.0.0:7777".
+func portOf(addr string) string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	return port
+}
+
 func main() {
 	// Launched directly (not by a supervisor)? Become one, so Restart works.
 	if os.Getenv("KEEP_SUPERVISED") != "1" {
@@ -64,6 +75,7 @@ func main() {
 	voiceIP := flag.String("voice-ip", os.Getenv("VOICE_PUBLIC_IP"), "public IP to advertise for voice (optional; default: gather from interfaces)")
 	tlsCert := flag.String("tls-cert", "", "path to a TLS certificate (PEM); serves https/wss when set together with -tls-key")
 	tlsKey := flag.String("tls-key", "", "path to the TLS private key (PEM); pairs with -tls-cert")
+	noUPnP := flag.Bool("no-upnp", false, "disable automatic UPnP port forwarding (force manual port-forwarding only)")
 	flag.Parse()
 
 	st, err := store.Open(*data)
@@ -124,6 +136,27 @@ func main() {
 	} else {
 		hub.SetInbound(voiceMgr)
 		log.Printf("  voice:       SFU on udp/%d", *voicePort)
+	}
+
+	// Automatic port forwarding (UPnP): best-effort open the chat (TCP) and voice
+	// (UDP) ports on the router so most home users skip manual port-forwarding.
+	// A Keep that's already reachable (manual forward / public IP) is unaffected —
+	// this just adds a mapping. Toggleable live from the host console; -no-upnp
+	// (or the saved setting) forces it off for owners who manage their own router.
+	netMgr := netmap.New()
+	if chatPort, perr := strconv.Atoi(portOf(*addr)); perr == nil && chatPort > 0 {
+		netMgr.SetPorts([]netmap.Port{
+			{Proto: "TCP", Num: uint16(chatPort)},
+			{Proto: "UDP", Num: uint16(*voicePort)},
+		})
+	}
+	srv.SetNetMap(netMgr)
+	upnpPref, _ := st.GetSetting(api.SettingUPnPEnabled)
+	if !*noUPnP && upnpPref != "0" { // default on; saved "0" or -no-upnp keeps it off
+		netMgr.Enable()
+		log.Printf("  port map:    UPnP auto-forward on (chat tcp/%s, voice udp/%d)", portOf(*addr), *voicePort)
+	} else {
+		log.Printf("  port map:    UPnP auto-forward off")
 	}
 
 	count, err := st.CountProfiles()

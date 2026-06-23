@@ -71,6 +71,7 @@ func (s *Server) handleHostState(w http.ResponseWriter, r *http.Request) {
 		"update_behind":     behind,
 		"update_checked":    checked,
 		"update_error":      updErr,
+		"upnp":              s.upnpState(),
 		"tls_enabled":       tlsEnabled == "1",
 		"tls_cert_path":     tlsCert,
 		"tls_key_path":      tlsKey,
@@ -355,6 +356,55 @@ func (s *Server) handleHostCheckUpdates(w http.ResponseWriter, r *http.Request) 
 	}
 	behind, _ := strconv.Atoi(strings.TrimSpace(string(out)))
 	writeJSON(w, http.StatusOK, map[string]any{"available": behind > 0, "behind": behind})
+}
+
+// upnpState reports the automatic-port-forwarding status for the host console.
+// available:false hides the control entirely (no mapper wired).
+func (s *Server) upnpState() map[string]any {
+	if s.netMap == nil {
+		return map[string]any{"available": false}
+	}
+	st := s.netMap.Status()
+	return map[string]any{
+		"available":     true,
+		"enabled":       st.Enabled,
+		"gateway_found": st.GatewayFound,
+		"active":        st.Active,
+		"external_ip":   st.ExternalIP,
+		"mappings":      st.Mappings,
+		"last_error":    st.LastError,
+	}
+}
+
+// handleHostUPnP toggles automatic UPnP port forwarding and persists the choice
+// so it survives restarts. Enabling kicks off discovery+mapping in the
+// background; disabling tears the mappings back down.
+func (s *Server) handleHostUPnP(w http.ResponseWriter, r *http.Request) {
+	if s.netMap == nil {
+		writeError(w, http.StatusNotImplemented, "automatic port forwarding is unavailable on this build")
+		return
+	}
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request")
+		return
+	}
+	v := "0"
+	if req.Enabled {
+		v = "1"
+	}
+	if err := s.st.SetSetting(SettingUPnPEnabled, v); err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+	if req.Enabled {
+		s.netMap.Enable()
+	} else {
+		s.netMap.Disable()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": req.Enabled})
 }
 
 // handleHostRescueInvite mints an invite from the host GUI — the "add a

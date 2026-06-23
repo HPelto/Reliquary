@@ -37,7 +37,8 @@ const exeName = process.env.KEEP_EXE ?? 'keep.exe'
 const dataDir = mkdtempSync(join(tmpdir(), 'keep-wire-'))
 const keep = spawn(
   join(import.meta.dirname, '..', 'keep', exeName),
-  ['-addr', `:${PORT}`, '-data', join(dataDir, 'keep.db'), '-name', 'Wire Test Keep'],
+  // -no-upnp keeps the test hermetic: don't let it open ports on the real router
+  ['-addr', `:${PORT}`, '-data', join(dataDir, 'keep.db'), '-name', 'Wire Test Keep', '-no-upnp'],
   // run the server in-process (not the self-supervisor) so we can manage it
   { env: { ...process.env, KEEP_SUPERVISED: '1' } }
 )

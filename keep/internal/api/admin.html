@@ -145,6 +145,15 @@
       <button onclick="saveVoicePort()">Save</button>
       <span class="err" id="voicePortErr" style="align-self:center;margin-top:0"></span>
     </div>
+    <div id="upnpRow" class="hidden" style="margin-top:12px;border-top:1px solid var(--edge);padding-top:12px;display:flex;align-items:center;gap:12px">
+      <div style="flex:1">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--hi);cursor:pointer">
+          <input type="checkbox" id="upnpEnabled" onchange="saveUpnp()"> Automatic port forwarding (UPnP)
+        </label>
+        <div class="note" style="margin-top:2px">Opens your chat &amp; voice ports on the router automatically so friends can connect without manual port-forwarding. Already forwarded by hand? Leave this on or off — it won't conflict.</div>
+        <div class="note" id="upnpStatus" style="margin-top:6px"></div>
+      </div>
+    </div>
     <div class="bar" style="margin-top:12px;border-top:1px solid var(--edge);padding-top:12px">
       <span style="align-self:center;font-size:13px;color:var(--hi)">Max upload size</span>
       <input id="uploadInput" class="mono" type="number" min="1" max="1024" placeholder="100" style="max-width:90px">
@@ -237,6 +246,13 @@ function renderState(st) {
   if (document.activeElement !== $('tlsCert')) $('tlsCert').value = st.tls_cert_path || ''
   if (document.activeElement !== $('tlsKey')) $('tlsKey').value = st.tls_key_path || ''
   if (document.activeElement !== $('uploadInput')) $('uploadInput').value = st.max_upload_mb || 100
+  const u = st.upnp || {}
+  $('upnpRow').classList.toggle('hidden', !u.available)
+  if (u.available) {
+    if (document.activeElement !== $('upnpEnabled')) $('upnpEnabled').checked = !!u.enabled
+    $('upnpStatus').textContent = upnpStatusText(u)
+    $('upnpStatus').style.color = upnpStatusColor(u)
+  }
   $('restartRow').classList.toggle('hidden', !st.restart_available)
   $('updateBtn').style.display = st.update_available ? '' : 'none'
   $('checkBtn').style.display = st.update_available ? '' : 'none'
@@ -320,6 +336,39 @@ async function saveVoicePort() {
     $('voicePortErr').style.color = 'var(--pulse)'
     $('voicePortErr').textContent = 'Saved — udp/' + r.voice_port + ' (restart to apply)'
   } catch (e) { $('voicePortErr').style.color = 'var(--ember)'; $('voicePortErr').textContent = e.message }
+}
+function upnpStatusText(u) {
+  if (!u.enabled) return 'Off — relying on manual port-forwarding (or a reachable public IP).'
+  if (u.active) {
+    const ip = u.external_ip ? ` Your address: ${u.external_ip}.` : ''
+    return `Ports forwarded automatically.${ip} Friends can connect without router setup.`
+  }
+  if (u.gateway_found) {
+    const errs = (u.mappings || []).filter(m => !m.ok).map(m => `${m.proto}/${m.port}: ${m.err}`).join('; ')
+    return `Found your router but couldn't open the ports${errs ? ' — ' + errs : ''}. You may need to forward them manually.`
+  }
+  if (u.last_error) return u.last_error
+  return 'Searching for a UPnP router on your network…'
+}
+function upnpStatusColor(u) {
+  if (!u.enabled) return 'var(--faint)'
+  if (u.active) return 'var(--pulse)'
+  if (u.gateway_found || u.last_error) return 'var(--ember)'
+  return 'var(--faint)'
+}
+async function saveUpnp() {
+  const enabled = $('upnpEnabled').checked
+  $('upnpStatus').style.color = 'var(--faint)'
+  $('upnpStatus').textContent = enabled ? 'Enabling — searching for your router…' : 'Disabling…'
+  try {
+    await api('/v1/host/upnp', { method: 'POST', body: JSON.stringify({ enabled }) })
+  } catch (e) {
+    $('upnpEnabled').checked = !enabled // revert on failure
+    $('upnpStatus').style.color = 'var(--ember)'
+    $('upnpStatus').textContent = e.message
+    return
+  }
+  setTimeout(refresh, 1500) // mapping takes a few seconds; let the next poll show the result
 }
 async function saveUploadLimit() {
   try {

@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"reliquary.gg/keep/internal/gateway"
+	"reliquary.gg/keep/internal/netmap"
 	"reliquary.gg/keep/internal/store"
 )
 
@@ -60,6 +61,7 @@ type Server struct {
 	restartFn  func() // set by main only when supervised; nil otherwise
 	updateFn   func() // pull-latest-then-rebuild restart; source mode only
 	selfUpdate func() // portable: download+swap latest release, then restart
+	netMap     *netmap.Manager // automatic UPnP port forwarding; nil if unavailable
 
 	// cached self-update status, refreshed by main's background checker
 	updMu      sync.Mutex
@@ -81,6 +83,10 @@ func (s *Server) SetUpdateRestart(fn func()) { s.updateFn = fn }
 // latest release binary, swaps it in, and restarts. When set, the host console
 // shows Update & Restart / Check for updates backed by GitHub instead of git.
 func (s *Server) SetSelfUpdate(fn func()) { s.selfUpdate = fn }
+
+// SetNetMap wires the automatic UPnP port-forwarder so the host console can show
+// its status and toggle it. When nil, the console hides the auto-forward control.
+func (s *Server) SetNetMap(m *netmap.Manager) { s.netMap = m }
 
 // SetUpdateStatus caches the latest known version so the host console can
 // passively surface "update available" between manual checks. Called by main's
@@ -193,6 +199,7 @@ func New(st *store.Store, hub *gateway.Hub, cfg Config) *Server {
 				r.Post("/restart", s.handleHostRestart)
 				r.Post("/update-restart", s.handleHostUpdateRestart)
 				r.Get("/check-updates", s.handleHostCheckUpdates)
+				r.Post("/upnp", s.handleHostUPnP)
 			})
 		})
 	})

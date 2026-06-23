@@ -5,6 +5,7 @@ go 1.26.4
 require (
 	github.com/coder/websocket v1.8.14
 	github.com/go-chi/chi/v5 v5.3.0
+	github.com/huin/goupnp v1.3.0
 	github.com/pion/interceptor v0.1.45
 	github.com/pion/logging v0.2.4
 	github.com/pion/webrtc/v4 v4.2.15
@@ -33,6 +34,7 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	modernc.org/libc v1.72.3 // indirect
