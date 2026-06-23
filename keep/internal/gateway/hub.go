@@ -38,11 +38,21 @@ type conn struct {
 	send   chan Event
 }
 
+// sub is a non-WebSocket gateway listener — a client reached over the RTC data
+// channel transport. It receives the same event stream as a WebSocket conn and
+// counts toward presence, but has no ws/readLoop; its events are forwarded by
+// the RTC layer.
+type sub struct {
+	userID int64
+	send   chan Event
+}
+
 type Hub struct {
 	st *store.Store
 
 	mu    sync.Mutex
 	conns map[*conn]struct{}
+	subs  map[*sub]struct{}
 	// online counts connections per user so multi-device works.
 	online map[int64]int
 	// state holds each connected user's chosen presence (online/idle/dnd/
@@ -58,6 +68,7 @@ func NewHub(st *store.Store) *Hub {
 	return &Hub{
 		st:     st,
 		conns:  make(map[*conn]struct{}),
+		subs:   make(map[*sub]struct{}),
 		online: make(map[int64]int),
 		state:  make(map[int64]string),
 	}
@@ -129,14 +140,62 @@ func (h *Hub) PresenceSnapshot() map[int64]string {
 func (h *Hub) Broadcast(t string, d any) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	ev := Event{T: t, D: d}
 	for c := range h.conns {
 		select {
-		case c.send <- Event{T: t, D: d}:
+		case c.send <- ev:
 		default:
 			// buffer full — abandon this connection; its writer will exit.
 			delete(h.conns, c)
 			close(c.send)
 		}
+	}
+	for s := range h.subs {
+		select {
+		case s.send <- ev:
+		default:
+			// drop the event (the client resyncs); keep the subscription, which
+			// the RTC layer owns and tears down on channel close.
+		}
+	}
+}
+
+// Subscribe registers a non-WebSocket gateway listener (the RTC transport). It
+// returns the event stream to forward to that client and an unsubscribe func,
+// and counts toward presence exactly like a WebSocket connection. The channel is
+// buffered; an overwhelmed consumer loses individual events (and resyncs), never
+// the whole subscription. unsubscribe is idempotent.
+func (h *Hub) Subscribe(userID int64) (<-chan Event, func()) {
+	s := &sub{userID: userID, send: make(chan Event, 64)}
+	h.mu.Lock()
+	h.subs[s] = struct{}{}
+	h.online[userID]++
+	firstConn := h.online[userID] == 1
+	h.mu.Unlock()
+	if firstConn {
+		h.broadcastPresence(userID)
+	}
+
+	var once sync.Once
+	return s.send, func() {
+		once.Do(func() {
+			h.mu.Lock()
+			delete(h.subs, s)
+			close(s.send)
+			h.online[userID]--
+			lastConn := h.online[userID] == 0
+			if lastConn {
+				delete(h.online, userID)
+				delete(h.state, userID)
+			}
+			h.mu.Unlock()
+			if lastConn {
+				if h.inbound != nil {
+					h.inbound.Disconnect(userID)
+				}
+				h.broadcastPresence(userID)
+			}
+		})
 	}
 }
 
@@ -145,15 +204,25 @@ func (h *Hub) Broadcast(t string, d any) {
 func (h *Hub) SendToUser(userID int64, t string, d any) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	ev := Event{T: t, D: d}
 	for c := range h.conns {
 		if c.userID != userID {
 			continue
 		}
 		select {
-		case c.send <- Event{T: t, D: d}:
+		case c.send <- ev:
 		default:
 			delete(h.conns, c)
 			close(c.send)
+		}
+	}
+	for s := range h.subs {
+		if s.userID != userID {
+			continue
+		}
+		select {
+		case s.send <- ev:
+		default:
 		}
 	}
 }
