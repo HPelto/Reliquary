@@ -1,8 +1,10 @@
-import { useEffect } from 'react'
+import { useEffect, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronLeft, ChevronRight, Download, File as FileIcon, Music, Play, X } from 'lucide-react'
 import { getKeep } from '@/net/bind'
 import { attachmentKind, type Attachment } from '@/net/keep'
+import { useUi } from '@/store'
+import { DEFAULT_ACCENT } from '@/lib/relic'
 import { VideoPlayer } from './VideoPlayer'
 
 const SINGLE_MAX = { w: 420, h: 340 }
@@ -218,6 +220,9 @@ export function Lightbox({
   onClose: () => void
 }): React.JSX.Element {
   const conn = getKeep(instanceId)
+  // the portal mounts at the document root, outside App's --accent scope, so the
+  // video player's progress bar would lose its color — re-provide it here.
+  const accent = useUi((s) => s.identity?.accent) ?? DEFAULT_ACCENT
   const url = (a: Attachment): string => conn?.mediaUrl(a.hash) ?? ''
   const dl = (a: Attachment): string => conn?.mediaDownloadUrl(a.hash, a.name) ?? url(a)
   const many = items.length > 1
@@ -245,6 +250,7 @@ export function Lightbox({
   return createPortal(
     <div
       className="fixed inset-0 z-[300] flex flex-col bg-void-0/92 backdrop-blur-sm"
+      style={{ '--accent': accent } as CSSProperties}
       onMouseDown={onClose}
     >
       {/* below the window's title-bar / native controls so nothing is clipped */}

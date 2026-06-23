@@ -246,14 +246,17 @@ export function VideoPlayer({
           className="group/bar relative h-1.5 cursor-pointer rounded-full bg-hi/20"
         >
           <div
-            className="absolute inset-y-0 left-0 rounded-full bg-[var(--accent)]"
-            style={{ width: `${pct}%` }}
+            className="absolute inset-y-0 left-0 rounded-full"
+            style={{ width: `${pct}%`, background: 'var(--accent, #8b7cf6)' }}
           />
           <div
             className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0 transition group-hover/bar:opacity-100"
             style={{ left: `${pct}%` }}
           >
-            <span className="block h-3 w-3 rounded-full bg-[var(--accent)] shadow" />
+            <span
+              className="block h-3 w-3 rounded-full shadow"
+              style={{ background: 'var(--accent, #8b7cf6)' }}
+            />
           </div>
         </div>
         <div className="flex items-center gap-3 text-hi">
