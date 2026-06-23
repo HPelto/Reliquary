@@ -152,11 +152,13 @@ func main() {
 	}
 	srv.SetNetMap(netMgr)
 	upnpPref, _ := st.GetSetting(api.SettingUPnPEnabled)
-	if !*noUPnP && upnpPref != "0" { // default on; saved "0" or -no-upnp keeps it off
+	// OFF by default: UPnP punches a hole in the router firewall, so it's strictly
+	// opt-in from the host console. Only a saved "1" (and not -no-upnp) turns it on.
+	if !*noUPnP && upnpPref == "1" {
 		netMgr.Enable()
-		log.Printf("  port map:    UPnP auto-forward on (chat tcp/%s, voice udp/%d)", portOf(*addr), *voicePort)
+		log.Printf("  port map:    UPnP auto-forward ON (chat tcp/%s, voice udp/%d) — firewall hole opened by owner's choice", portOf(*addr), *voicePort)
 	} else {
-		log.Printf("  port map:    UPnP auto-forward off")
+		log.Printf("  port map:    UPnP auto-forward off (default; enable in host console if you can't port-forward manually)")
 	}
 
 	count, err := st.CountProfiles()

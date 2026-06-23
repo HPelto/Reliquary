@@ -145,14 +145,17 @@
       <button onclick="saveVoicePort()">Save</button>
       <span class="err" id="voicePortErr" style="align-self:center;margin-top:0"></span>
     </div>
-    <div id="upnpRow" class="hidden" style="margin-top:12px;border-top:1px solid var(--edge);padding-top:12px;display:flex;align-items:center;gap:12px">
-      <div style="flex:1">
-        <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--hi);cursor:pointer">
-          <input type="checkbox" id="upnpEnabled" onchange="saveUpnp()"> Automatic port forwarding (UPnP)
-        </label>
-        <div class="note" style="margin-top:2px">Opens your chat &amp; voice ports on the router automatically so friends can connect without manual port-forwarding. Already forwarded by hand? Leave this on or off — it won't conflict.</div>
-        <div class="note" id="upnpStatus" style="margin-top:6px"></div>
+    <div id="upnpRow" class="hidden" style="margin-top:12px;border-top:1px solid var(--edge);padding-top:12px">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--hi);cursor:pointer">
+        <input type="checkbox" id="upnpEnabled" onchange="saveUpnp()"> Automatic port forwarding (UPnP)
+        <span class="pill" style="color:var(--lo)">off by default</span>
+      </label>
+      <div style="margin-top:8px;border:1px solid rgba(255,107,129,.4);background:rgba(255,107,129,.09);border-radius:10px;padding:10px 12px;font-size:12px;color:var(--ember);line-height:1.55">
+        <strong>⚠ Security warning — leave this OFF unless you truly need it.</strong><br>
+        UPnP tells your router to open this Keep's ports to the public internet <strong>automatically, bypassing the firewall</strong> that normally shields every device on your network. That exposes the Keep directly to the internet, lets <em>any</em> program on your network open ports without your knowledge, and depends on UPnP — which has a long history of router security flaws. <strong>Manual port-forwarding is safer</strong> — you control exactly what gets opened. Only turn this on if you can't port-forward by hand and you accept the risk.
       </div>
+      <div class="note" style="margin-top:6px">When on, opens your chat &amp; voice ports so friends can connect without router setup. Already forwarded by hand (or using a tunnel)? Leave this off.</div>
+      <div class="note" id="upnpStatus" style="margin-top:6px"></div>
     </div>
     <div class="bar" style="margin-top:12px;border-top:1px solid var(--edge);padding-top:12px">
       <span style="align-self:center;font-size:13px;color:var(--hi)">Max upload size</span>
