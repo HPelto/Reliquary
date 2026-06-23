@@ -64,8 +64,21 @@ func Check(repo, current string) Status {
 		return st
 	}
 	st.Latest = m.Version
-	st.Behind = newer(m.Version, current)
+	// Only a real stamped release can be "behind". An unstamped build ("dev",
+	// empty, or 0.0.0 — e.g. a hand `go build`) never offers an update.
+	st.Behind = isRelease(current) && newer(m.Version, current)
 	return st
+}
+
+// isRelease reports whether v looks like a stamped release version (has a
+// non-zero numeric component), as opposed to "dev"/""/"0.0.0".
+func isRelease(v string) bool {
+	for _, n := range parseVer(v) {
+		if n > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // Apply downloads the latest portable zip, verifies its SHA-256 against the

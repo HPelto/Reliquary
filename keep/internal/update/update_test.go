@@ -25,3 +25,22 @@ func TestNewer(t *testing.T) {
 		}
 	}
 }
+
+func TestIsRelease(t *testing.T) {
+	cases := []struct {
+		v    string
+		want bool
+	}{
+		{"0.1.14", true},
+		{"v0.1.0", true},
+		{"1.0.0", true},
+		{"dev", false},  // hand `go build` — never "behind"
+		{"", false},     // unset
+		{"0.0.0", false},
+	}
+	for _, c := range cases {
+		if got := isRelease(c.v); got != c.want {
+			t.Errorf("isRelease(%q) = %v, want %v", c.v, got, c.want)
+		}
+	}
+}
