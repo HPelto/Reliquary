@@ -28,6 +28,12 @@
   .mono { font-family:ui-monospace,Consolas,monospace; font-size:11.5px; }
   .dim { color:var(--mid); } .faint { color:var(--lo); }
   .note { font-size:12px; color:var(--lo); margin-top:8px; }
+  details.upnp-warn { margin-top:8px; border:1px solid rgba(255,107,129,.4); background:rgba(255,107,129,.09); border-radius:10px; }
+  details.upnp-warn summary { cursor:pointer; padding:10px 12px; font-size:12px; font-weight:600; color:var(--ember); user-select:none; }
+  details.upnp-warn summary::marker { color:var(--ember); }
+  details.upnp-warn summary::-webkit-details-marker { color:var(--ember); }
+  details.upnp-warn[open] summary { border-bottom:1px solid rgba(255,107,129,.2); }
+  .upnp-warn-body { padding:10px 12px 11px; font-size:12px; color:var(--ember); line-height:1.55; }
   .pill { font-size:10px; padding:2px 7px; border-radius:99px; border:1px solid var(--edge); color:var(--mid); }
   .pill.owner { color:var(--gold); border-color:rgba(232,201,122,.35); background:rgba(232,201,122,.08); }
   .pill.on { color:var(--pulse); border-color:rgba(61,220,196,.35); background:rgba(61,220,196,.08); }
@@ -150,10 +156,12 @@
         <input type="checkbox" id="upnpEnabled" onchange="saveUpnp()"> Automatic port forwarding (UPnP)
         <span class="pill" style="color:var(--lo)">off by default</span>
       </label>
-      <div style="margin-top:8px;border:1px solid rgba(255,107,129,.4);background:rgba(255,107,129,.09);border-radius:10px;padding:10px 12px;font-size:12px;color:var(--ember);line-height:1.55">
-        <strong>⚠ Security warning — leave this OFF unless you truly need it.</strong><br>
-        UPnP tells your router to open this Keep's ports to the public internet <strong>automatically, bypassing the firewall</strong> that normally shields every device on your network. That exposes the Keep directly to the internet, lets <em>any</em> program on your network open ports without your knowledge, and depends on UPnP — which has a long history of router security flaws. <strong>Manual port-forwarding is safer</strong> — you control exactly what gets opened. Only turn this on if you can't port-forward by hand and you accept the risk.
-      </div>
+      <details class="upnp-warn">
+        <summary>⚠ Security warning — leave this OFF unless you truly need it.</summary>
+        <div class="upnp-warn-body">
+          UPnP tells your router to open this Keep's ports to the public internet <strong>automatically, bypassing the firewall</strong> that normally shields every device on your network. That exposes the Keep directly to the internet, lets <em>any</em> program on your network open ports without your knowledge, and depends on UPnP — which has a long history of router security flaws. <strong>Manual port-forwarding is safer</strong> — you control exactly what gets opened. Only turn this on if you can't port-forward by hand and you accept the risk.
+        </div>
+      </details>
       <div class="note" style="margin-top:6px">When on, opens your chat &amp; voice ports so friends can connect without router setup. Already forwarded by hand (or using a tunnel)? Leave this off.</div>
       <div class="note" id="upnpStatus" style="margin-top:6px"></div>
     </div>
