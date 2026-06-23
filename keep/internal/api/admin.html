@@ -44,6 +44,24 @@
     color:var(--hi); padding:9px 12px; font:inherit; outline:none; min-width:0;
   }
   input:focus { border-color:rgba(139,124,246,.5); }
+  /* custom checkbox — replaces the native OS control with the app's relic look */
+  input[type="checkbox"] {
+    appearance:none; -webkit-appearance:none;
+    width:17px; height:17px; padding:0; border-radius:5px; min-width:0;
+    border:1px solid rgba(255,255,255,.16); background:rgba(7,8,12,.7);
+    cursor:pointer; flex:none; position:relative; vertical-align:middle;
+    transition:background .12s ease, border-color .12s ease, box-shadow .12s ease;
+  }
+  input[type="checkbox"]:hover { border-color:rgba(139,124,246,.6); }
+  input[type="checkbox"]:checked {
+    background:var(--relic); border-color:var(--relic);
+    box-shadow:0 0 0 3px rgba(139,124,246,.14);
+  }
+  input[type="checkbox"]:checked::after {
+    content:""; position:absolute; left:5px; top:2px; width:4px; height:8px;
+    border:solid #fff; border-width:0 2px 2px 0; transform:rotate(45deg);
+  }
+  input[type="checkbox"]:focus-visible { outline:2px solid rgba(139,124,246,.6); outline-offset:2px; }
   button {
     background:var(--relic); color:var(--void-0); border:0; border-radius:10px;
     padding:9px 16px; font:inherit; font-weight:700; cursor:pointer; transition:box-shadow .15s;
