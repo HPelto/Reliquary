@@ -91,6 +91,24 @@
       .hidden { display: none !important; }
       .spin { animation: spin 1.1s linear infinite; }
       @keyframes spin { to { transform: rotate(360deg); } }
+
+      /* license gate */
+      .licensebox {
+        width: 100%; flex: 1; min-height: 120px; margin-top: 12px;
+        background: var(--void-1); border: 1px solid var(--edge); border-radius: 10px;
+        padding: 12px 14px; text-align: left; overflow-y: auto; white-space: pre-wrap;
+        font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; line-height: 1.6;
+        color: var(--mid); user-select: text;
+      }
+      .licensebox::-webkit-scrollbar { width: 8px; }
+      .licensebox::-webkit-scrollbar-thumb { background: var(--void-3); border-radius: 8px; }
+      .scrollhint { font-size: 10.5px; color: var(--lo); margin-top: 7px; }
+      .agree {
+        display: flex; align-items: flex-start; gap: 9px; text-align: left; margin-top: 11px;
+        font-size: 12px; color: var(--hi); line-height: 1.4; cursor: pointer;
+      }
+      .agree input { width: 15px; height: 15px; flex: none; margin-top: 1px; accent-color: var(--relic); cursor: pointer; }
+      .agree input:disabled { cursor: default; opacity: 0.5; }
     </style>
   </head>
   <body>
@@ -105,8 +123,18 @@
     <main>
       <div class="crest">◆</div>
 
+      <!-- LICENSE (shown first; must be read + accepted) -->
+      <div id="screen-license" style="width:100%; display:flex; flex-direction:column; align-items:center; flex:1; min-height:0;">
+        <h1 style="margin-top:2px; font-size:18px;">Before you install</h1>
+        <p class="sub" style="margin-top:4px;">Reliquary is free for <b style="color:var(--hi)">personal, non-commercial use</b>. Please read the license below and accept to continue — commercial use requires a separate license.</p>
+        <div id="licensebox" class="licensebox">Loading license…</div>
+        <div class="scrollhint" id="scrollhint">Scroll to the bottom of the license to continue.</div>
+        <label class="agree"><input type="checkbox" id="agree" disabled /> <span>I have read and agree to the <b>PolyForm Noncommercial 1.0.0</b> license.</span></label>
+        <button class="primary" id="accept" disabled style="margin-top:12px;">Agree &amp; continue</button>
+      </div>
+
       <!-- CONFIG -->
-      <div id="screen-config" style="width:100%; display:flex; flex-direction:column; align-items:center; flex:1;">
+      <div id="screen-config" class="hidden" style="width:100%; display:flex; flex-direction:column; align-items:center; flex:1;">
         <h1>Install Reliquary</h1>
         <p class="sub">Your worlds, your servers, your relic. This will fetch the latest client straight from the source and set it up.</p>
         <p class="ver" id="ver">Checking for the latest version…</p>
@@ -156,7 +184,9 @@
       const win = window.__TAURI__.window.getCurrentWindow()
 
       const $ = (id) => document.getElementById(id)
+      const crest = document.querySelector('.crest')
       const screens = {
+        license: $('screen-license'),
         config: $('screen-config'),
         progress: $('screen-progress'),
         done: $('screen-done'),
@@ -164,6 +194,8 @@
       }
       const show = (name) => {
         for (const k in screens) screens[k].classList.toggle('hidden', k !== name)
+        // hide the brand crest on the license screen so the text has room to breathe
+        if (crest) crest.style.display = name === 'license' ? 'none' : ''
       }
 
       let release = null
@@ -171,6 +203,37 @@
 
       $('close').onclick = () => win.close()
       $('min').onclick = () => win.minimize()
+
+      // license gate: load the embedded license, require a scroll-through, then
+      // an explicit checkbox before the user can continue to install.
+      async function loadLicense() {
+        const box = $('licensebox')
+        const agree = $('agree')
+        const hint = $('scrollhint')
+        try {
+          box.textContent = await invoke('license_text')
+        } catch (_) {
+          box.textContent =
+            'Reliquary is licensed under PolyForm Noncommercial 1.0.0 — free for personal, non-commercial use; commercial use requires a separate license. Read it at https://polyformproject.org/licenses/noncommercial/1.0.0'
+        }
+        const unlock = () => {
+          agree.disabled = false
+          hint.style.display = 'none'
+          box.removeEventListener('scroll', onScroll)
+        }
+        const onScroll = () => {
+          if (box.scrollTop + box.clientHeight >= box.scrollHeight - 8) unlock()
+        }
+        box.addEventListener('scroll', onScroll)
+        // nothing to scroll (short text / tall window) → unlock right away
+        if (box.scrollHeight <= box.clientHeight + 8) unlock()
+        agree.onchange = () => ($('accept').disabled = !agree.checked)
+      }
+
+      $('accept').onclick = () => {
+        show('config')
+        init()
+      }
 
       async function init() {
         try {
@@ -229,7 +292,9 @@
         show('error')
       })
 
-      init()
-    </script>
+      // start on the license gate; install only proceeds after acceptance
+      show('license')
+      loadLicense()
+</script>
   </body>
 </html>

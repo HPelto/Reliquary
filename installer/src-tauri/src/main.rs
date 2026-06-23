@@ -266,6 +266,13 @@ fn launch(dir: String) -> Result<(), String> {
     Ok(())
 }
 
+// license_text embeds the project LICENSE at compile time so the installer can
+// show it for acceptance — always in sync with the repo's actual license.
+#[tauri::command]
+fn license_text() -> String {
+    include_str!("../../../LICENSE").to_string()
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -274,7 +281,8 @@ fn main() {
             fetch_latest,
             pick_dir,
             install,
-            launch
+            launch,
+            license_text
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Reliquary installer");
