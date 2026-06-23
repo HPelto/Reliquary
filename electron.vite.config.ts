@@ -13,7 +13,9 @@ export default defineConfig({
       alias: {
         '@': resolve(__dirname, 'src/renderer/src'),
         // bundled sound effects (and future audio assets) live in /audio
-        '@audio': resolve(__dirname, 'audio')
+        '@audio': resolve(__dirname, 'audio'),
+        // repo root, so the renderer can bundle the LICENSE (imported ?raw)
+        '@root': resolve(__dirname)
       }
     },
     // let the dev server read the /audio folder, which sits outside the renderer root

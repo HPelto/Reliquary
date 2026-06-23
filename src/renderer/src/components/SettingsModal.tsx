@@ -13,8 +13,9 @@ import { NameStyleModal } from './NameStyleModal'
 import { StyledName } from './StyledName'
 import { VoiceSettings } from './VoiceSettings'
 import { UpdatesCard } from './UpdatesCard'
+import { LicenseCard } from './LicenseCard'
 
-type Tab = 'profile' | 'account' | 'blocked'
+type Tab = 'profile' | 'account' | 'blocked' | 'license'
 
 export function SettingsModal(): React.JSX.Element | null {
   const {
@@ -146,7 +147,8 @@ export function SettingsModal(): React.JSX.Element | null {
           [
             { key: 'profile', label: 'My Profile' },
             { key: 'account', label: 'Account' },
-            { key: 'blocked', label: 'Blocked Users' }
+            { key: 'blocked', label: 'Blocked Users' },
+            { key: 'license', label: 'License' }
           ] as { key: Tab; label: string }[]
         ).map((t) => (
           <button
@@ -406,6 +408,18 @@ export function SettingsModal(): React.JSX.Element | null {
               action="Unsilence"
               onAction={(pubkey) => unsilenceUser(pubkey)}
             />
+          </div>
+        )}
+
+        {tab === 'license' && (
+          <div className="mx-auto max-w-[560px] px-8 py-10">
+            <h1 className="font-display text-[22px] font-bold tracking-tight">License</h1>
+            <p className="mt-1 text-[13px] text-mid">
+              The terms this copy of Reliquary is licensed to you under.
+            </p>
+            <div className="mt-6">
+              <LicenseCard />
+            </div>
           </div>
         )}
       </div>
