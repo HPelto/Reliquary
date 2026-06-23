@@ -13,9 +13,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/pion/webrtc/v4"
 
 	"reliquary.gg/keep/internal/gateway"
 	"reliquary.gg/keep/internal/netmap"
+	"reliquary.gg/keep/internal/rtc"
 	"reliquary.gg/keep/internal/store"
 )
 
@@ -62,6 +64,7 @@ type Server struct {
 	updateFn   func() // pull-latest-then-rebuild restart; source mode only
 	selfUpdate func() // portable: download+swap latest release, then restart
 	netMap     *netmap.Manager // automatic UPnP port forwarding; nil if unavailable
+	rtc        *rtc.Tunnel     // serves the API over a WebRTC data channel (P2P transport)
 
 	// cached self-update status, refreshed by main's background checker
 	updMu      sync.Mutex
@@ -123,6 +126,12 @@ func (s *Server) applyUpdate() func() {
 func New(st *store.Store, hub *gateway.Hub, cfg Config) *Server {
 	s := &Server{st: st, hub: hub, cfg: cfg, challenges: newChallenges()}
 
+	// The P2P transport serves the whole API over a WebRTC data channel by
+	// replaying each framed request through s itself — the full router + auth
+	// stack, reused verbatim. A public STUN server lets it gather a reflexive
+	// candidate for real hole-punching.
+	s.rtc = rtc.New(s, []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}})
+
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP, middleware.Recoverer, cors)
 
@@ -150,6 +159,7 @@ func New(st *store.Store, hub *gateway.Hub, cfg Config) *Server {
 			r.Post("/auth/challenge", s.handleChallenge)
 			r.Post("/auth/handshake", s.handleHandshake)
 			r.Get("/invites/{token}", s.handleInvitePreview)
+				r.Post("/rtc/connect", s.handleRTCConnect) // WebRTC signaling (P2P transport)
 
 			r.Group(func(r chi.Router) {
 				r.Use(s.requireAuth)
@@ -209,6 +219,31 @@ func New(st *store.Store, hub *gateway.Hub, cfg Config) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
+
+// handleRTCConnect is the WebRTC signaling endpoint: a client POSTs its SDP
+// offer, the Keep stands up a peer connection that tunnels the API over the data
+// channel, and returns the SDP answer. Unauthenticated by design — the offer/
+// answer carry no secrets; auth still happens per request inside the tunnel. In
+// production THIS endpoint is the only thing that must be reachable (via a
+// Cloudflare tunnel or a small forwarded handshake port); the API traffic then
+// flows peer-to-peer, DTLS-encrypted.
+func (s *Server) handleRTCConnect(w http.ResponseWriter, r *http.Request) {
+	if s.rtc == nil {
+		writeError(w, http.StatusNotImplemented, "rtc transport unavailable")
+		return
+	}
+	var offer webrtc.SessionDescription
+	if err := json.NewDecoder(r.Body).Decode(&offer); err != nil {
+		writeError(w, http.StatusBadRequest, "bad offer")
+		return
+	}
+	answer, err := s.rtc.Answer(offer)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "rtc setup failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, answer)
+}
 
 // ── helpers ─────────────────────────────────────────────────────────
 
