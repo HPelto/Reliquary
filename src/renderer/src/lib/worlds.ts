@@ -18,6 +18,9 @@ export interface SavedWorld {
   abbr: string
   accent: string
   keepPassword?: string
+  /** the Keep's identity pubkey (base64), pinned on first verified connect so
+   *  later P2P connects detect a MITM (trust-on-first-use). */
+  keepKey?: string
 }
 
 import { kvGet, kvSet } from './storage'

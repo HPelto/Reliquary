@@ -1,5 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, nativeTheme, session } from 'electron'
 import { autoUpdater } from 'electron-updater'
+import { spawn } from 'child_process'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { join } from 'path'
 
@@ -208,6 +209,34 @@ app.whenReady().then(() => {
     win.isMaximized() ? win.unmaximize() : win.maximize()
   })
   ipcMain.handle('window:close', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
+
+  // Dev-only convenience for the Experimental sandbox: rebuild the renderer/main
+  // bundle from source and relaunch this instance so a code change shows without
+  // manually stopping + re-running the launcher. Never available in a packaged
+  // release (the titlebar button is hidden there too).
+  ipcMain.handle('app:is-dev', () => !app.isPackaged)
+  ipcMain.handle('dev:rebuild-restart', async () => {
+    if (app.isPackaged) return { error: 'not available in a packaged build' }
+    // out/main/index.js → repo root is two levels up
+    const repoRoot = join(__dirname, '..', '..')
+    return await new Promise<{ ok?: boolean; error?: string }>((resolve) => {
+      // inherit stdio so the full build output (incl. TS errors) shows in the
+      // terminal that launched this client.
+      const proc = spawn('npm', ['run', 'build'], { cwd: repoRoot, shell: true, stdio: 'inherit' })
+      proc.on('error', (e) => resolve({ error: String(e?.message ?? e) }))
+      proc.on('close', (code) => {
+        if (code === 0) {
+          // relaunch preserves argv (incl. --user-data-dir), so the isolated
+          // sandbox profile is kept; then exit so the fresh bundle loads.
+          app.relaunch()
+          app.exit(0)
+          resolve({ ok: true })
+        } else {
+          resolve({ error: `build failed (exit ${code}) — see the launcher terminal` })
+        }
+      })
+    })
+  })
 
   createWindow()
   setupAutoUpdate()

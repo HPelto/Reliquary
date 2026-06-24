@@ -13,6 +13,7 @@ import { NameStyleModal } from './NameStyleModal'
 import { StyledName } from './StyledName'
 import { VoiceSettings } from './VoiceSettings'
 import { UpdatesCard } from './UpdatesCard'
+import { ExperimentsCard } from './ExperimentsCard'
 import { LicenseCard } from './LicenseCard'
 
 type Tab = 'profile' | 'account' | 'blocked' | 'license'
@@ -383,6 +384,7 @@ export function SettingsModal(): React.JSX.Element | null {
 
             <VoiceSettings />
             <UpdatesCard />
+            <ExperimentsCard />
           </div>
         )}
 

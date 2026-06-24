@@ -79,13 +79,14 @@ export function InvitesPanel({ conn }: { conn: KeepConnection }): React.JSX.Elem
     setCopied(key)
     setTimeout(() => setCopied(null), 1500)
   }
+  // embed the Keep's identity pubkey so a joiner pins it (P2P MITM protection)
   const copyCode = (inv: KeepInvite): void =>
-    void encodeRelicCode({ ...chosen(), token: inv.token }).then((c) =>
-      copy(`code-${inv.token}`, c)
+    void encodeRelicCode({ ...chosen(), token: inv.token, keepKey: conn.keepKey ?? undefined }).then(
+      (c) => copy(`code-${inv.token}`, c)
     )
   const copyLink = (inv: KeepInvite): void =>
-    void encodeRelicCode({ ...chosen(), token: inv.token }).then((c) =>
-      copy(`link-${inv.token}`, joinLink(c))
+    void encodeRelicCode({ ...chosen(), token: inv.token, keepKey: conn.keepKey ?? undefined }).then(
+      (c) => copy(`link-${inv.token}`, joinLink(c))
     )
 
   return (

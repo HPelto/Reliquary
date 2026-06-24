@@ -36,6 +36,10 @@ const api = {
   minimize: (): Promise<void> => ipcRenderer.invoke('window:minimize'),
   toggleMaximize: (): Promise<void> => ipcRenderer.invoke('window:toggle-maximize'),
   close: (): Promise<void> => ipcRenderer.invoke('window:close'),
+  // dev-only (Experimental sandbox): rebuild from source + relaunch this instance
+  isDev: (): Promise<boolean> => ipcRenderer.invoke('app:is-dev'),
+  rebuildRestart: (): Promise<{ ok?: boolean; error?: string }> =>
+    ipcRenderer.invoke('dev:rebuild-restart'),
   onWindowState: (cb: (maximized: boolean) => void): (() => void) => {
     const listener = (_: unknown, maximized: boolean): void => cb(maximized)
     ipcRenderer.on('window:state', listener)

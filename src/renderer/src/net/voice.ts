@@ -15,6 +15,7 @@
 import { getKeep } from './bind'
 import { useUi } from '@/store'
 import { getVoicePrefs, setVoicePrefs, type VoicePrefs } from '@/lib/voicePrefs'
+import { isVoiceOnTransport } from '@/lib/experiments'
 import { playVoiceJoin, playVoiceLeave } from '@/lib/sound'
 
 export type VoiceStatus = 'idle' | 'connecting' | 'connected' | 'failed'
@@ -46,6 +47,11 @@ class VoiceSession {
   readonly channelId: number
 
   private pc: RTCPeerConnection
+  // A6b: when true, pc is the Keep connection's shared transport PC (voice rides
+  // the same hole-punched link, no separate SFU port). We must NOT close it on
+  // leave, and we use addEventListener (not .on*) so we don't clobber the
+  // transport's own handlers.
+  private shared: boolean
   private localStream: MediaStream | null = null
   private micTrack: MediaStreamTrack | null = null
   private micSender: RTCRtpSender | null = null // the audio sender; trackless if no mic
@@ -78,12 +84,20 @@ class VoiceSession {
     this.channelId = channelId
     this.selfId = getKeep(instanceId)?.self?.id ?? 0
     this.prefs = getVoicePrefs()
-    // STUN lets a NATed client discover its public address for hole-punching to
-    // the SFU. Host/LAN/loopback candidates (the main process disables mDNS so
-    // they're raw IPs the SFU can pair) cover same-machine + LAN.
-    this.pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-    })
+
+    // A6b: ride the existing P2P transport connection when enabled + available.
+    const sharedPc = isVoiceOnTransport() ? (getKeep(instanceId)?.rtcPeerConnection() ?? null) : null
+    this.shared = !!sharedPc
+    if (sharedPc) {
+      this.pc = sharedPc
+    } else {
+      // legacy SFU path: our own PC to the Keep's voice port. STUN lets a NATed
+      // client discover its public address; host/LAN/loopback candidates (mDNS is
+      // disabled so they're raw IPs the SFU can pair) cover same-machine + LAN.
+      this.pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      })
+    }
   }
 
   async start(): Promise<void> {
@@ -108,26 +122,44 @@ class VoiceSession {
     // committed to entering — cue the join sound.
     playVoiceJoin()
 
-    this.pc.onicecandidate = (e) => {
-      if (e.candidate) send(this.instanceId, 'VOICE_ICE', { candidate: e.candidate.toJSON() })
-    }
-    this.pc.ontrack = (e) => this.onRemoteTrack(e)
-    this.pc.onconnectionstatechange = () => {
-      if (this.closed) return
-      const st = this.pc.connectionState
-      if (st === 'connected') useUi.getState().setVoiceStatus('connected', this.lastPing)
-      else if (st === 'failed') useUi.getState().setVoiceStatus('failed')
+    if (this.shared) {
+      // shared transport PC: use addEventListener so we don't clobber the
+      // transport's own handlers, and skip onicecandidate (ICE is already up —
+      // adding audio reuses it; no candidates to trickle).
+      this.pc.addEventListener('track', this.onTrackEvent)
+      this.pc.addEventListener('connectionstatechange', this.onConnState)
+    } else {
+      this.pc.onicecandidate = (e) => {
+        if (e.candidate) send(this.instanceId, 'VOICE_ICE', { candidate: e.candidate.toJSON() })
+      }
+      this.pc.ontrack = (e) => this.onRemoteTrack(e)
+      this.pc.onconnectionstatechange = this.onConnState
     }
 
     const offer = await this.pc.createOffer()
     await this.pc.setLocalDescription(offer)
     if (this.closed) return this.teardownMedia()
-    send(this.instanceId, 'VOICE_JOIN', { channel_id: this.channelId, sdp: this.pc.localDescription })
+    send(this.instanceId, 'VOICE_JOIN', {
+      channel_id: this.channelId,
+      sdp: this.pc.localDescription,
+      on_transport: this.shared
+    })
+    // the shared transport link is already connected, so reflect that at once
+    if (this.shared) useUi.getState().setVoiceStatus('connected', this.lastPing)
 
     this.startAnalysis()
     this.startStats()
     this.attachPttListeners()
   }
+
+  // bound so shared mode can add/removeEventListener (legacy mode uses .on*)
+  private onConnState = (): void => {
+    if (this.closed) return
+    const st = this.pc.connectionState
+    if (st === 'connected') useUi.getState().setVoiceStatus('connected', this.lastPing)
+    else if (st === 'failed') useUi.getState().setVoiceStatus('failed')
+  }
+  private onTrackEvent = (e: Event): void => this.onRemoteTrack(e as RTCTrackEvent)
 
   /** Inbound VOICE_* signaling from the SFU (routed via net/bind onVoice). */
   handle(t: string, d: unknown): void {
@@ -390,10 +422,23 @@ class VoiceSession {
     window.removeEventListener('keydown', this.onKeyDown)
     window.removeEventListener('keyup', this.onKeyUp)
     this.teardownMedia()
-    try {
-      this.pc.close()
-    } catch {
-      /* already closed */
+    if (this.shared) {
+      // never close the transport PC (it carries the data channel). Drop our mic
+      // sender + detach our listeners; the server reconciles leftover senders on
+      // the next join. Leaves inactive audio m-lines until a rejoin renegotiates.
+      try {
+        if (this.micSender) this.pc.removeTrack(this.micSender)
+      } catch {
+        /* sender already gone */
+      }
+      this.pc.removeEventListener('track', this.onTrackEvent)
+      this.pc.removeEventListener('connectionstatechange', this.onConnState)
+    } else {
+      try {
+        this.pc.close()
+      } catch {
+        /* already closed */
+      }
     }
     useUi.getState().setVoiceSpeaking([])
   }

@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -52,6 +53,19 @@ func (s *Server) handleHostState(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	iceServers, forceRelay := s.iceConfig()
+	iceURLs := []string{}
+	iceUser, iceCred := "", ""
+	for _, sv := range iceServers {
+		iceURLs = append(iceURLs, sv.URLs...)
+		if sv.Username != "" {
+			iceUser = sv.Username
+		}
+		if sv.Credential != "" {
+			iceCred = sv.Credential
+		}
+	}
+
 	latest, behind, checked, updErr := s.updateStatus()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":              s.instanceName(),
@@ -76,6 +90,10 @@ func (s *Server) handleHostState(w http.ResponseWriter, r *http.Request) {
 		"tls_cert_path":     tlsCert,
 		"tls_key_path":      tlsKey,
 		"max_upload_mb":     maxUploadMB,
+		"ice_urls":          iceURLs,
+		"ice_username":      iceUser,
+		"ice_credential":    iceCred,
+		"force_relay":       forceRelay,
 	})
 }
 
@@ -261,8 +279,31 @@ func (s *Server) handleHostDeleteUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "storage error")
 		return
 	}
+	dropped := s.hub.DisconnectUser(id) // kick any live connections immediately
+	log.Printf("host: removed user %d (dropped %d live connection(s))", id, dropped)
 	s.hub.Broadcast("MEMBER_LEAVE", map[string]any{"user_id": id})
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
+}
+
+// handleHostRevokeSessions kills every session for a user — instant logout
+// without removing the account. Their current tokens stop working at once
+// (storage delete) and their live connections are force-dropped (hub); they must
+// re-handshake (re-prove key ownership) to get back in. The forensic use: a
+// leaked token can be neutralized without the user losing their account.
+func (s *Server) handleHostRevokeSessions(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad user id")
+		return
+	}
+	revoked, err := s.st.RevokeSessions(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+	dropped := s.hub.DisconnectUser(id)
+	log.Printf("host: revoked %d session(s) and dropped %d live connection(s) for user %d", revoked, dropped, id)
+	writeJSON(w, http.StatusOK, map[string]any{"revoked": revoked, "disconnected": dropped})
 }
 
 type addrReq struct {

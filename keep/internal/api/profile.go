@@ -6,24 +6,21 @@ package api
 // the client pushes the same hashes to every Keep it joins.
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"reliquary.gg/keep/internal/store"
 )
 
-const defaultMaxUploadMB = 100 // used when the owner hasn't set a limit
+const defaultMaxUploadMB = 100  // used when the owner hasn't set a limit
 const maxUploadCeilingMB = 1024 // hard upper bound the console will accept
 
 // maxUploadBytes is the owner-configured upload cap (Host Console), in bytes.
@@ -141,24 +138,14 @@ func (s *Server) handleGetMedia(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", `attachment; filename="`+sanitizeFilename(name)+`"`)
 	}
 
-	// Disk-backed (current media): ServeContent streams only the requested byte
-	// range straight from the file, so seeking a large video doesn't re-read the
-	// whole thing into memory.
-	if f, ferr := os.Open(s.st.MediaFilePath(hash)); ferr == nil {
-		defer f.Close()
-		var mod time.Time
-		if fi, _ := f.Stat(); fi != nil {
-			mod = fi.ModTime()
-		}
-		http.ServeContent(w, r, "", mod, f)
-		return
-	}
-
-	// Fallback: media uploaded before disk storage still lives as a SQLite blob.
-	_, data, gerr := s.st.GetMedia(hash)
-	if gerr != nil {
+	// The store hands back a seekable reader of the PLAINTEXT bytes: it streams
+	// straight from the disk file when unencrypted (Range/seek intact), or decrypts
+	// into memory when encryption at rest is on. Legacy SQLite-blob media too.
+	reader, mod, closeFn, oerr := s.st.OpenMediaContent(hash)
+	if oerr != nil {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
-	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
+	defer closeFn()
+	http.ServeContent(w, r, "", mod, reader)
 }

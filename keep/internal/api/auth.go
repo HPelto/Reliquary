@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -289,5 +290,8 @@ func (s *Server) handleHandshake(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "storage error")
 		return
 	}
+	// activity trail for breach forensics: every new session, with the identity
+	// fingerprint that authenticated it.
+	log.Printf("auth: new session for user %d (%s, key %s)", user.ID, user.Username, user.Fingerprint)
 	writeJSON(w, http.StatusOK, map[string]any{"token": token, "user": user})
 }

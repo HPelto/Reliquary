@@ -9,6 +9,11 @@
 // relative imports so this module also runs under plain Node for headless tests
 import { signNonce } from '../lib/identity'
 import { mediaRefToBytes, type PendingAttachment, type Profile } from '../lib/profile'
+import { RtcTransport, type GatewayEvent, type RtcResponse, type RtcBytesResponse } from './rtc'
+
+/** Which wire a connection rides: classic HTTP+WebSocket, or the encrypted P2P
+ *  WebRTC data channel (signaling still over HTTP). */
+export type KeepTransport = 'http' | 'rtc'
 
 export interface KeepChannel {
   id: number
@@ -98,6 +103,11 @@ export interface KeepEvent {
   created_at: number
 }
 
+export interface VoiceChannelState {
+  channel_id: number
+  participants: { user_id: number; muted: boolean; deafened: boolean }[]
+}
+
 export interface KeepWorld {
   name: string
   version: string
@@ -107,6 +117,8 @@ export interface KeepWorld {
   lock_name_style?: boolean
   require_invite?: boolean
   max_upload_mb?: number
+  /** current voice occupancy, so occupants show before you join */
+  voice_states?: VoiceChannelState[]
 }
 
 export interface KeepDiscovery {
@@ -194,18 +206,39 @@ export class KeepConnection {
   self: KeepUser | null = null
   world: KeepWorld | null = null
   ping = 0
+  /** the Keep's identity pubkey (base64): the pin we were given (invite/saved),
+   *  refreshed from discovery. Used to mint invites that pin future joiners. */
+  keepKey: string | null = null
   /** the local user's chosen presence; re-asserted to the Keep on each connect */
   presence: KeepPresence = 'online'
 
+  /** The transport this connection rides. 'rtc' tunnels the whole API + gateway
+   *  over an encrypted WebRTC data channel; only signaling touches HTTP. */
+  readonly transport: KeepTransport
+
   private events: KeepEvents
   private ws: WebSocket | null = null
+  private rtc: RtcTransport | null = null
+  // rtc mode: hash → blob: URL, so media fetched over the channel renders in
+  // <img>/<video>/<audio> and is fetched at most once. Revoked on close().
+  private mediaBlobs = new Map<string, string>()
   private closed = false
   private reconnectMs = RECONNECT_BASE_MS
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
-  constructor(target: { host: string; port: number; secure?: boolean }, events: KeepEvents = {}) {
+  constructor(
+    target: {
+      host: string
+      port: number
+      secure?: boolean
+      transport?: KeepTransport
+      keepKey?: string
+    },
+    events: KeepEvents = {}
+  ) {
     this.host = target.host
     this.port = target.port
+    this.keepKey = target.keepKey ?? null
     // Explicit https/wss scheme wins; otherwise fall back to the legacy
     // port-443 inference so existing saved Keeps keep working unchanged.
     const secure = target.secure ?? target.port === 443
@@ -213,9 +246,16 @@ export class KeepConnection {
     this.baseUrl = `${secure ? 'https' : 'http'}://${target.host}${portPart}`
     this.wsUrl = `${secure ? 'wss' : 'ws'}://${target.host}${portPart}`
     this.events = events
+    this.transport = target.transport ?? 'http'
+    if (this.transport === 'rtc') {
+      // signaling rides HTTP (POST /v1/rtc/connect); the API + gateway flow P2P.
+      // Pass the known Keep pubkey so the transport can pin against a MITM.
+      this.rtc = new RtcTransport(`${this.baseUrl}/v1/rtc/connect`, this.keepKey ?? undefined)
+    }
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
+    if (this.rtc) return this.requestRtc<T>(path, init)
     let res: Response
     try {
       res = await fetch(this.baseUrl + path, {
@@ -240,19 +280,60 @@ export class KeepConnection {
     return body as T
   }
 
+  // The RTC twin of request(): the same path/method/body/headers, but tunneled
+  // over the data channel instead of fetch. It mirrors request()'s JSON + error
+  // contract exactly, so every caller is transport-agnostic.
+  private async requestRtc<T>(path: string, init?: RequestInit): Promise<T> {
+    const method = String(init?.method ?? 'GET').toUpperCase()
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+      ...((init?.headers as Record<string, string>) ?? {})
+    }
+    let resp: RtcResponse
+    try {
+      resp = await this.rtc!.request(method, path, {
+        headers,
+        body: typeof init?.body === 'string' ? init.body : undefined
+      })
+    } catch {
+      throw new KeepError(`No Keep answered at ${this.host} — is it running and reachable?`)
+    }
+    let body: Record<string, unknown> = {}
+    try {
+      if (resp.text) body = JSON.parse(resp.text) as Record<string, unknown>
+    } catch {
+      /* non-JSON body — treat as empty, status drives the outcome */
+    }
+    if (resp.status < 200 || resp.status >= 300) {
+      throw new KeepError(
+        String(body.error ?? `server returned ${resp.status}`),
+        resp.status,
+        typeof body.code === 'string' ? body.code : undefined
+      )
+    }
+    return body as T
+  }
+
   /** Step 1 — resolve the instance and measure ping. */
   async discover(): Promise<KeepDiscovery> {
     this.events.onStatus?.('discovering')
+    // Establish the peer link first so the measured ping is the data-channel
+    // round trip, not the one-time ICE/handshake setup.
+    if (this.rtc) await this.rtc.connect()
     const started = performance.now()
     const d = await this.request<{
       instance: { name: string }
       protocol: string
       version: string
+      keep_key?: string
     }>('/.well-known/reliquary')
     this.ping = Math.max(1, Math.round(performance.now() - started))
     if (d.protocol !== 'relic.v1') {
       throw new KeepError(`This server speaks "${d.protocol}", not relic.v1 — update one side.`)
     }
+    // learn the Keep's identity pubkey so invites we mint can pin future joiners
+    if (d.keep_key) this.keepKey = d.keep_key
     return { name: d.instance.name, protocol: d.protocol, version: d.version }
   }
 
@@ -287,7 +368,9 @@ export class KeepConnection {
 
   // ── profile & media ────────────────────────────────────────────────
 
-  /** Absolute URL for an <img>/<video>/<audio> — public, immutable, content-addressed. */
+  /** Absolute URL for an <img>/<video>/<audio> — public, immutable, content-addressed.
+   *  HTTP transport only; in rtc mode the HTTP port may be unreachable — use
+   *  mediaSrc() instead, which fetches the bytes over the channel. */
   mediaUrl(hash: string): string {
     return hash ? `${this.baseUrl}/v1/media/${hash}` : ''
   }
@@ -295,6 +378,43 @@ export class KeepConnection {
   /** Same bytes, but forces a download with the original filename. */
   mediaDownloadUrl(hash: string, name: string): string {
     return hash ? `${this.baseUrl}/v1/media/${hash}?download=${encodeURIComponent(name)}` : ''
+  }
+
+  /**
+   * A displayable URL for a media hash, transport-aware:
+   *  - HTTP: the direct content-addressed URL (the browser fetches it itself).
+   *  - RTC : fetch the bytes over the channel once, wrap them in a Blob, and
+   *    return a cached `blob:` URL. The blob is fully in memory, so <video>
+   *    seeking works without server Range support. Revoked on close().
+   * NOTE: media GET is a public route, so no auth header is needed.
+   */
+  async mediaSrc(hash: string): Promise<string> {
+    if (!hash) return ''
+    if (!this.rtc) return this.mediaUrl(hash)
+    const cached = this.mediaBlobs.get(hash)
+    if (cached) return cached
+    let resp: RtcBytesResponse
+    try {
+      resp = await this.rtc.requestBytes('GET', `/v1/media/${hash}`)
+    } catch {
+      throw new KeepError(`couldn't fetch media ${hash} over the channel`)
+    }
+    if (resp.status < 200 || resp.status >= 300) {
+      throw new KeepError(`media ${hash} unavailable (${resp.status})`, resp.status)
+    }
+    const type = resp.headers['Content-Type'] || 'application/octet-stream'
+    // copy into a fresh ArrayBuffer-backed view so Blob accepts it (TS's strict
+    // Uint8Array<ArrayBufferLike> isn't a BlobPart; the copy is cheap + safe)
+    const url = URL.createObjectURL(new Blob([new Uint8Array(resp.bytes)], { type }))
+    // a concurrent fetch may have populated the cache while we awaited — reuse
+    // the winner and revoke our duplicate so there's one blob per hash.
+    const won = this.mediaBlobs.get(hash)
+    if (won) {
+      URL.revokeObjectURL(url)
+      return won
+    }
+    this.mediaBlobs.set(hash, url)
+    return url
   }
 
   async mediaExists(hash: string): Promise<boolean> {
@@ -305,6 +425,10 @@ export class KeepConnection {
 
   /** Upload media bytes (raw, not JSON). Idempotent — content-addressed. */
   async uploadMedia(ref: { hash: string; type: string; dataUrl: string }): Promise<void> {
+    if (this.rtc) {
+      await this.putMediaBytes(ref.hash, ref.type, mediaRefToBytes(ref))
+      return
+    }
     const res = await fetch(`${this.baseUrl}/v1/media/${ref.hash}`, {
       method: 'PUT',
       headers: {
@@ -488,13 +612,20 @@ export class KeepConnection {
     }
   }
 
-  /** PUT raw bytes with upload-progress events (fetch can't report these). */
-  private putMediaWithProgress(
+  /** PUT raw bytes with upload-progress events (fetch can't report these). Over
+   *  rtc there are no native upload-progress events, so progress is reported once
+   *  the channel transfer completes (coarse but correct). */
+  private async putMediaWithProgress(
     hash: string,
     contentType: string,
     file: Blob,
     onProgress?: (loaded: number) => void
   ): Promise<void> {
+    if (this.rtc) {
+      await this.putMediaBytes(hash, contentType, new Uint8Array(await file.arrayBuffer()))
+      onProgress?.(file.size)
+      return
+    }
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest()
       xhr.open('PUT', `${this.baseUrl}/v1/media/${hash}`)
@@ -522,6 +653,28 @@ export class KeepConnection {
     })
   }
 
+  /** PUT media bytes over the rtc channel (binary-safe). 409 = already present
+   *  (content-addressed), which is success. Shared by uploadMedia +
+   *  putMediaWithProgress when in rtc mode. */
+  private async putMediaBytes(hash: string, contentType: string, bytes: Uint8Array): Promise<void> {
+    const resp = await this.rtc!.requestBytes('PUT', `/v1/media/${hash}`, {
+      headers: {
+        'Content-Type': contentType,
+        ...(this.token ? { Authorization: `Bearer ${this.token}` } : {})
+      },
+      body: bytes
+    })
+    if (resp.status >= 300 && resp.status !== 409) {
+      let msg = `media upload failed (${resp.status})`
+      try {
+        msg = (JSON.parse(new TextDecoder().decode(resp.bytes)) as { error?: string }).error ?? msg
+      } catch {
+        /* non-JSON error body */
+      }
+      throw new KeepError(msg, resp.status)
+    }
+  }
+
   /** Owner only. ttlSeconds: 0 = server default (7d), -1 = never expires. */
   async createInvite(
     ttlSeconds = 0,
@@ -536,6 +689,10 @@ export class KeepConnection {
   /** Step 4 — live events, with automatic reconnect + resync. */
   openGateway(): void {
     if (this.closed || !this.token) return
+    if (this.rtc) {
+      this.openGatewayRtc()
+      return
+    }
     const ws = new WebSocket(`${this.wsUrl}/v1/gateway?token=${this.token}`)
     this.ws = ws
 
@@ -564,6 +721,45 @@ export class KeepConnection {
       this.reconnectTimer = setTimeout(() => this.openGateway(), this.reconnectMs)
       this.reconnectMs = Math.min(this.reconnectMs * 2, RECONNECT_MAX_MS)
     }
+  }
+
+  // Gateway over the RTC data channel: subscribe, then route each push through
+  // the same dispatch the WebSocket path uses. The opening HELLO stands in for
+  // ws.onopen; a dropped peer connection (or a failed initial connect) schedules
+  // a reconnect, matching the WebSocket backoff.
+  private openGatewayRtc(): void {
+    const token = this.token
+    if (!token || !this.rtc) return
+    this.rtc.onClose = () => {
+      if (this.closed) return
+      this.events.onStatus?.('offline')
+      this.scheduleReconnect()
+    }
+    void this.rtc
+      .subscribeGateway(token, (ev: GatewayEvent) => {
+        if (ev.t === 'HELLO') {
+          this.reconnectMs = RECONNECT_BASE_MS
+          this.events.onStatus?.('online')
+          // re-assert our chosen presence (server defaults a fresh sub to online)
+          if (this.presence !== 'online') this.sendGateway('PRESENCE_SET', { state: this.presence })
+          // catch up on anything missed while disconnected (status stays online)
+          void this.fetchWorld().catch(() => {})
+          return
+        }
+        this.dispatch({ t: ev.t, d: ev.d })
+      })
+      .catch(() => {
+        if (this.closed) return
+        this.events.onStatus?.('offline')
+        this.scheduleReconnect()
+      })
+  }
+
+  private scheduleReconnect(): void {
+    if (this.closed) return
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = setTimeout(() => this.openGateway(), this.reconnectMs)
+    this.reconnectMs = Math.min(this.reconnectMs * 2, RECONNECT_MAX_MS)
   }
 
   private dispatch(ev: { t: string; d: unknown }): void {
@@ -618,12 +814,21 @@ export class KeepConnection {
     }
   }
 
-  /** Send a raw envelope up the gateway socket (voice signaling). No-op if
-   *  the socket isn't open — voice frames are best-effort. */
+  /** Send a raw envelope up the gateway (voice signaling, presence). Best-effort —
+   *  no-op if the connection isn't open. Over RTC it rides the data channel as an
+   *  upstream frame (presence sync + voice signaling now work P2P); over the WS
+   *  path it's a socket send. */
   sendGateway(t: string, d: unknown): boolean {
+    if (this.rtc) return this.rtc.sendUpstream(t, d)
     if (this.ws?.readyState !== WebSocket.OPEN) return false
     this.ws.send(JSON.stringify({ t, d }))
     return true
+  }
+
+  /** The P2P transport's peer connection when connected over rtc, else null.
+   *  Lets voice ride the same connection (A6b). */
+  rtcPeerConnection(): RTCPeerConnection | null {
+    return this.rtc?.peerConnection() ?? null
   }
 
   /** Set the local user's presence on this Keep (broadcast to its members). */
@@ -648,5 +853,9 @@ export class KeepConnection {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     this.ws?.close()
     this.ws = null
+    this.rtc?.close()
+    this.rtc = null
+    for (const url of this.mediaBlobs.values()) URL.revokeObjectURL(url)
+    this.mediaBlobs.clear()
   }
 }

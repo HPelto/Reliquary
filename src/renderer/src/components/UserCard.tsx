@@ -1,6 +1,6 @@
 import { nameColorFor } from '@/lib/nameStyle'
 import { presenceColor } from '@/lib/presence'
-import { getKeep } from '@/net/bind'
+import { useMedia } from '@/lib/useMedia'
 import type { KeepMember } from '@/net/keep'
 import { KeepAvatar } from './KeepAvatar'
 import { StyledName } from './StyledName'
@@ -18,7 +18,7 @@ export function UserCard({
   locked?: boolean
   full?: boolean
 }): React.JSX.Element {
-  const bgUrl = member.background ? getKeep(instanceId)?.mediaUrl(member.background) : ''
+  const { src: bgUrl } = useMedia(instanceId, member.background)
 
   return (
     <div className="glass w-[280px] overflow-hidden rounded-2xl shadow-[0_24px_60px_-12px_rgba(0,0,0,0.8)]">

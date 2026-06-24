@@ -45,6 +45,7 @@ type conn struct {
 type sub struct {
 	userID int64
 	send   chan Event
+	once   sync.Once // tear down exactly once (RTC-layer unsub OR force-disconnect)
 }
 
 type Hub struct {
@@ -175,28 +176,64 @@ func (h *Hub) Subscribe(userID int64) (<-chan Event, func()) {
 	if firstConn {
 		h.broadcastPresence(userID)
 	}
+	return s.send, func() { h.removeSub(s) }
+}
 
-	var once sync.Once
-	return s.send, func() {
-		once.Do(func() {
-			h.mu.Lock()
-			delete(h.subs, s)
-			close(s.send)
-			h.online[userID]--
-			lastConn := h.online[userID] == 0
-			if lastConn {
-				delete(h.online, userID)
-				delete(h.state, userID)
+// removeSub tears down one RTC subscription exactly once — whether the RTC layer
+// unsubscribes on channel close or DisconnectUser force-drops it — updating
+// presence exactly like a WebSocket disconnect.
+func (h *Hub) removeSub(s *sub) {
+	s.once.Do(func() {
+		h.mu.Lock()
+		delete(h.subs, s)
+		close(s.send)
+		h.online[s.userID]--
+		lastConn := h.online[s.userID] == 0
+		if lastConn {
+			delete(h.online, s.userID)
+			delete(h.state, s.userID)
+		}
+		h.mu.Unlock()
+		if lastConn {
+			if h.inbound != nil {
+				h.inbound.Disconnect(s.userID)
 			}
-			h.mu.Unlock()
-			if lastConn {
-				if h.inbound != nil {
-					h.inbound.Disconnect(userID)
-				}
-				h.broadcastPresence(userID)
-			}
-		})
+			h.broadcastPresence(s.userID)
+		}
+	})
+}
+
+// DisconnectUser force-drops every live connection (WebSocket + RTC) for a user,
+// so a session revocation takes effect immediately instead of lingering on an
+// already-open channel that no longer re-checks the token. Returns how many
+// connections were dropped.
+func (h *Hub) DisconnectUser(userID int64) int {
+	h.mu.Lock()
+	var wsConns []*conn
+	var rtcSubs []*sub
+	for c := range h.conns {
+		if c.userID == userID {
+			wsConns = append(wsConns, c)
+		}
 	}
+	for s := range h.subs {
+		if s.userID == userID {
+			rtcSubs = append(rtcSubs, s)
+		}
+	}
+	h.mu.Unlock()
+
+	// WebSocket: closing the socket unblocks readLoop, which runs the normal
+	// ServeHTTP cleanup (presence + online count). Don't close its send channel
+	// here — that would race the cleanup's own close.
+	for _, c := range wsConns {
+		c.ws.Close(websocket.StatusPolicyViolation, "session revoked")
+	}
+	// RTC: tear down via removeSub (idempotent with the RTC layer's own unsub).
+	for _, s := range rtcSubs {
+		h.removeSub(s)
+	}
+	return len(wsConns) + len(rtcSubs)
 }
 
 // SendToUser queues an event to every connection belonging to one user. Slow
@@ -370,21 +407,32 @@ func (c *conn) readLoop(ctx context.Context) {
 		if json.Unmarshal(raw, &ev) != nil {
 			continue
 		}
-		switch {
-		case ev.T == "PING":
+		// PING answers on THIS exact connection, so it stays here; everything else
+		// goes through the shared inbound router (also used by the RTC upstream).
+		if ev.T == "PING" {
 			select {
 			case c.send <- Event{T: "PONG", D: nil}:
 			default:
 			}
-		case ev.T == "PRESENCE_SET":
-			var d struct {
-				State string `json:"state"`
-			}
-			if json.Unmarshal(ev.D, &d) == nil && validPresence(d.State) {
-				c.h.setPresence(c.userID, d.State)
-			}
-		case ev.T != "" && c.h.inbound != nil:
-			c.h.inbound.HandleVoice(c.userID, ev.T, ev.D)
+			continue
 		}
+		c.h.RouteInbound(c.userID, ev.T, ev.D)
+	}
+}
+
+// RouteInbound dispatches a client→server gateway frame that isn't connection-
+// specific — a presence change or voice signaling — so the WebSocket read loop
+// and the RTC data-channel upstream share one path.
+func (h *Hub) RouteInbound(userID int64, t string, d json.RawMessage) {
+	switch {
+	case t == "PRESENCE_SET":
+		var p struct {
+			State string `json:"state"`
+		}
+		if json.Unmarshal(d, &p) == nil && validPresence(p.State) {
+			h.setPresence(userID, p.State)
+		}
+	case t != "" && h.inbound != nil:
+		h.inbound.HandleVoice(userID, t, d)
 	}
 }

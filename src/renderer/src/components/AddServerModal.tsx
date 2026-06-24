@@ -1,5 +1,5 @@
 ﻿import { useEffect, useRef, useState } from 'react'
-import { Check, Globe, KeyRound, Loader2, Lock, ShieldAlert, X } from 'lucide-react'
+import { Check, Eye, Globe, KeyRound, Loader2, Lock, ShieldAlert, X } from 'lucide-react'
 import { loadProfile } from '@/lib/profile'
 import { accentFor, hostTag, parseAddress, type RelicTarget } from '@/lib/relic'
 import { upsertWorld } from '@/lib/worlds'
@@ -159,7 +159,10 @@ function JoinTab(): React.JSX.Element {
       name: world.name,
       abbr,
       accent,
-      keepPassword: keepPw || undefined
+      keepPassword: keepPw || undefined,
+      // pin the Keep identity from the invite (if any); bind.ts also persists the
+      // discovery-confirmed key on connect
+      keepKey: target.keepKey
     })
     const firstText = world.channels.find((c) => c.kind === 'text')
     if (firstText) setChannel(String(firstText.id))
@@ -318,9 +321,18 @@ function JoinTab(): React.JSX.Element {
             </span>
           </div>
 
+          <p className="mt-4 flex items-start gap-2 rounded-lg border border-edge bg-void-0/50 px-3 py-2 text-[11.5px] leading-relaxed text-lo">
+            <Eye size={13} className="mt-0.5 shrink-0 text-gold" />
+            <span>
+              This is a self-hosted Keep — its owner runs the server and{' '}
+              <span className="text-mid">can read messages and files sent here</span>. Conversations
+              aren&apos;t end-to-end encrypted; treat it like any community server.
+            </span>
+          </p>
+
           <button
             onClick={enter}
-            className="mt-5 w-full rounded-xl bg-gold py-2.5 font-display text-[14px] font-bold text-void-0 transition-all duration-150 hover:shadow-[0_0_28px_rgba(232,201,122,0.45)]"
+            className="mt-3 w-full rounded-xl bg-gold py-2.5 font-display text-[14px] font-bold text-void-0 transition-all duration-150 hover:shadow-[0_0_28px_rgba(232,201,122,0.45)]"
           >
             Enter the Vault
           </button>

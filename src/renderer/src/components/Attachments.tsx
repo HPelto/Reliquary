@@ -1,7 +1,7 @@
 import { useEffect, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronLeft, ChevronRight, Download, File as FileIcon, Music, Play, X } from 'lucide-react'
-import { getKeep } from '@/net/bind'
+import { useMedia } from '@/lib/useMedia'
 import { attachmentKind, type Attachment } from '@/net/keep'
 import { useUi } from '@/store'
 import { DEFAULT_ACCENT } from '@/lib/relic'
@@ -77,36 +77,9 @@ function VisualMedia({
   instanceId: string
   onOpen: (visuals: Attachment[], index: number, startAt?: number, autoPlay?: boolean) => void
 }): React.JSX.Element {
-  const conn = getKeep(instanceId)
-  const url = (a: Attachment): string => conn?.mediaUrl(a.hash) ?? ''
-  const dl = (a: Attachment): string => conn?.mediaDownloadUrl(a.hash, a.name) ?? url(a)
-
   // single visual: a clean, aspect-preserving preview
   if (items.length === 1) {
-    const a = items[0]
-    const box = fitBox(a)
-    if (attachmentKind(a) === 'video') {
-      return (
-        <VideoPlayer
-          src={url(a)}
-          name={a.name}
-          downloadUrl={dl(a)}
-          onExpand={(time, playing) => onOpen(items, 0, time, playing)}
-          boxStyle={{ width: box.width, height: box.height }}
-        />
-      )
-    }
-    return (
-      <img
-        src={url(a)}
-        alt={a.name}
-        onClick={() => onOpen(items, 0)}
-        style={{ width: box.width, height: box.height }}
-        className="cursor-pointer rounded-lg border border-edge object-cover transition-[filter] hover:brightness-90"
-        loading="lazy"
-        draggable={false}
-      />
-    )
+    return <SingleVisual a={items[0]} instanceId={instanceId} items={items} onOpen={onOpen} />
   }
 
   // gallery: mixed images + videos, each a square thumbnail → lightbox
@@ -118,22 +91,11 @@ function VisualMedia({
           onClick={() => onOpen(items, i, 0, attachmentKind(a) === 'video')}
           className="group/cell relative aspect-square w-full cursor-pointer overflow-hidden rounded-lg border border-edge bg-void-0"
         >
-          {attachmentKind(a) === 'video' ? (
-            <video
-              src={`${url(a)}#t=0.1`}
-              muted
-              preload="metadata"
-              className="h-full w-full object-cover"
-            />
-          ) : (
-            <img
-              src={url(a)}
-              alt={a.name}
-              className="h-full w-full object-cover transition-[filter] group-hover/cell:brightness-90"
-              loading="lazy"
-              draggable={false}
-            />
-          )}
+          <VisualThumb
+            a={a}
+            instanceId={instanceId}
+            imgClass="h-full w-full object-cover transition-[filter] group-hover/cell:brightness-90"
+          />
           {attachmentKind(a) === 'video' && (
             <div className="absolute inset-0 flex items-center justify-center bg-void-0/15 transition group-hover/cell:bg-void-0/30">
               <div className="flex h-11 w-11 items-center justify-center rounded-full bg-void-0/70 backdrop-blur">
@@ -147,6 +109,69 @@ function VisualMedia({
   )
 }
 
+/** One single image/video preview (resolves its own transport-aware src). */
+function SingleVisual({
+  a,
+  instanceId,
+  items,
+  onOpen
+}: {
+  a: Attachment
+  instanceId: string
+  items: Attachment[]
+  onOpen: (visuals: Attachment[], index: number, startAt?: number, autoPlay?: boolean) => void
+}): React.JSX.Element {
+  const { src, download } = useMedia(instanceId, a.hash, a.name)
+  const box = fitBox(a)
+  if (attachmentKind(a) === 'video') {
+    return (
+      <VideoPlayer
+        src={src}
+        name={a.name}
+        downloadUrl={download}
+        onExpand={(time, playing) => onOpen(items, 0, time, playing)}
+        boxStyle={{ width: box.width, height: box.height }}
+      />
+    )
+  }
+  return (
+    <img
+      src={src}
+      alt={a.name}
+      onClick={() => onOpen(items, 0)}
+      style={{ width: box.width, height: box.height }}
+      className="cursor-pointer rounded-lg border border-edge object-cover transition-[filter] hover:brightness-90"
+      loading="lazy"
+      draggable={false}
+    />
+  )
+}
+
+/** A square image-or-video thumbnail that resolves its own src — used in both the
+ *  inline gallery and the lightbox strip, so each fetches over the right transport. */
+function VisualThumb({
+  a,
+  instanceId,
+  imgClass = 'h-full w-full object-cover'
+}: {
+  a: Attachment
+  instanceId: string
+  imgClass?: string
+}): React.JSX.Element {
+  const { src } = useMedia(instanceId, a.hash)
+  if (attachmentKind(a) === 'video') {
+    return (
+      <video
+        src={src ? `${src}#t=0.1` : ''}
+        muted
+        preload="metadata"
+        className="h-full w-full object-cover"
+      />
+    )
+  }
+  return <img src={src} alt={a.name} className={imgClass} loading="lazy" draggable={false} />
+}
+
 function AttachmentBlock({
   a,
   instanceId
@@ -154,9 +179,7 @@ function AttachmentBlock({
   a: Attachment
   instanceId: string
 }): React.JSX.Element {
-  const conn = getKeep(instanceId)
-  const url = conn?.mediaUrl(a.hash) ?? ''
-  const dl = conn?.mediaDownloadUrl(a.hash, a.name) ?? url
+  const { src: url, download: dl } = useMedia(instanceId, a.hash, a.name)
 
   if (attachmentKind(a) === 'audio') {
     return (
@@ -219,12 +242,12 @@ export function Lightbox({
   onIndex: (i: number) => void
   onClose: () => void
 }): React.JSX.Element {
-  const conn = getKeep(instanceId)
   // the portal mounts at the document root, outside App's --accent scope, so the
   // video player's progress bar would lose its color — re-provide it here.
   const accent = useUi((s) => s.identity?.accent) ?? DEFAULT_ACCENT
-  const url = (a: Attachment): string => conn?.mediaUrl(a.hash) ?? ''
-  const dl = (a: Attachment): string => conn?.mediaDownloadUrl(a.hash, a.name) ?? url(a)
+  const cur = items[index]
+  // resolve the current item over the right transport (hash '' when out of range)
+  const { src: curSrc, download: curDl } = useMedia(instanceId, cur?.hash ?? '', cur?.name ?? '')
   const many = items.length > 1
   const prev = (): void => onIndex((index - 1 + items.length) % items.length)
   const next = (): void => onIndex((index + 1) % items.length)
@@ -240,7 +263,6 @@ export function Lightbox({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, items.length])
 
-  const cur = items[index]
   if (!cur) return <></>
   const isVid = attachmentKind(cur) === 'video'
 
@@ -259,7 +281,7 @@ export function Lightbox({
         onMouseDown={(e) => e.stopPropagation()}
       >
         <a
-          href={dl(cur)}
+          href={curDl}
           download={cur.name}
           className="rounded-lg p-2 text-mid transition-colors hover:bg-void-3 hover:text-hi"
           title={`Download ${cur.name}`}
@@ -287,16 +309,16 @@ export function Lightbox({
         {isVid ? (
           <VideoPlayer
             key={cur.hash}
-            src={url(cur)}
+            src={curSrc}
             name={cur.name}
-            downloadUrl={dl(cur)}
+            downloadUrl={curDl}
             startAt={startAt}
             autoPlay={autoPlay}
             large
           />
         ) : (
           <img
-            src={url(cur)}
+            src={curSrc}
             alt={cur.name}
             className="max-h-full max-w-full rounded-lg object-contain shadow-[0_20px_80px_-12px_rgba(0,0,0,0.9)]"
             draggable={false}
@@ -322,11 +344,7 @@ export function Lightbox({
                 i === index ? 'opacity-100 ring-2 ring-[var(--accent)]' : 'opacity-50 hover:opacity-80'
               }`}
             >
-              {attachmentKind(a) === 'video' ? (
-                <video src={`${url(a)}#t=0.1`} muted preload="metadata" className="h-full w-full object-cover" />
-              ) : (
-                <img src={url(a)} alt={a.name} className="h-full w-full object-cover" draggable={false} />
-              )}
+              <VisualThumb a={a} instanceId={instanceId} />
               {attachmentKind(a) === 'video' && (
                 <div className="absolute inset-0 flex items-center justify-center">
                   <Play size={14} className="text-hi drop-shadow" fill="currentColor" />

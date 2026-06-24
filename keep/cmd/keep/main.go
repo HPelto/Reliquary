@@ -25,8 +25,9 @@ import (
 )
 
 // Exit codes a supervising launcher (start-keep.cmd) watches for:
-//   42 — rebuild local source and run again (host GUI "Restart")
-//   43 — pull latest source first, then rebuild (host GUI "Update & Restart")
+//
+//	42 — rebuild local source and run again (host GUI "Restart")
+//	43 — pull latest source first, then rebuild (host GUI "Update & Restart")
 const restartExitCode = 42
 const updateExitCode = 43
 
@@ -135,6 +136,8 @@ func main() {
 		log.Printf("  voice:       disabled (%v)", verr)
 	} else {
 		hub.SetInbound(voiceMgr)
+		srv.SetVoiceSnapshot(func() any { return voiceMgr.Snapshot() }) // seed /v1/world with occupancy
+		voiceMgr.SetPCProvider(srv)                                     // allow voice to ride the P2P transport (A6b)
 		log.Printf("  voice:       SFU on udp/%d", *voicePort)
 	}
 

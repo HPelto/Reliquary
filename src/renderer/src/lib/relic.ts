@@ -38,6 +38,8 @@ export interface RelicTarget {
   name?: string
   token?: string
   fingerprint?: string
+  /** the Keep's Ed25519 identity pubkey (base64) — pins the P2P transport against MITM */
+  keepKey?: string
   /** true when the address used an https/wss scheme; undefined = infer (port 443) */
   secure?: boolean
   source: 'code' | 'uri' | 'domain' | 'ip'
@@ -84,6 +86,17 @@ interface Payload {
   name?: string
   token?: string
   fingerprint?: string
+  keepKey?: string // base64 Ed25519 Keep identity pubkey
+}
+
+function b64ToBytes(s: string): Uint8Array {
+  const bin = atob(s)
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0))
+}
+function bytesToB64(b: Uint8Array): string {
+  let s = ''
+  for (const x of b) s += String.fromCharCode(x)
+  return btoa(s)
 }
 
 const IP_RE = /^(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?$/
@@ -95,6 +108,7 @@ const FLAG_IPV4 = 1
 const FLAG_NAME = 2
 const FLAG_TOKEN = 4
 const FLAG_FINGERPRINT = 8
+const FLAG_KEEPKEY = 16
 
 function packPayload(p: Payload): Uint8Array {
   const enc = new TextEncoder()
@@ -121,6 +135,12 @@ function packPayload(p: Payload): Uint8Array {
   if (p.name) pushStr(p.name, FLAG_NAME)
   if (p.token) pushStr(p.token, FLAG_TOKEN)
   if (p.fingerprint) pushStr(p.fingerprint, FLAG_FINGERPRINT)
+  if (p.keepKey) {
+    // the 32-byte pubkey rides as raw bytes (length-prefixed), not a string
+    flags |= FLAG_KEEPKEY
+    const raw = b64ToBytes(p.keepKey)
+    bytes.push(raw.length, ...raw)
+  }
 
   bytes[1] = flags
   return new Uint8Array(bytes)
@@ -151,11 +171,18 @@ function unpackPayload(bytes: Uint8Array): Payload | null {
     i += len
     return s
   }
+  const readRaw = (): Uint8Array => {
+    const len = bytes[i++]
+    const r = bytes.slice(i, i + len)
+    i += len
+    return r
+  }
   const name = flags & FLAG_NAME ? readStr() : undefined
   const token = flags & FLAG_TOKEN ? readStr() : undefined
   const fingerprint = flags & FLAG_FINGERPRINT ? readStr() : undefined
+  const keepKey = flags & FLAG_KEEPKEY ? bytesToB64(readRaw()) : undefined
 
-  return { host, port, name, token, fingerprint }
+  return { host, port, name, token, fingerprint, keepKey }
 }
 
 export async function encodeRelicCode(target: {
@@ -164,6 +191,7 @@ export async function encodeRelicCode(target: {
   name?: string
   token?: string
   fingerprint?: string
+  keepKey?: string
 }): Promise<string> {
   const plaintext = packPayload({ ...target, port: target.port ?? DEFAULT_PORT })
   const keyBytes = crypto.getRandomValues(new Uint8Array(KEY_LEN))

@@ -20,3 +20,5 @@ installer/src-tauri/target/
 installer/src-tauri/gen/
 # the built installer exe (distribute via release/hand-off, not the repo)
 installation_File/*.exe
+# local P2P-transport test sandbox (built binaries + runtime data + scripts)
+Experimental/

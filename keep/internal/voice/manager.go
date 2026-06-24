@@ -31,6 +31,15 @@ type Signaler interface {
 	Broadcast(t string, d any)
 }
 
+// PCProvider hands the SFU an already-connected peer connection for a user — the
+// P2P data-channel transport's PC — so voice can ride that same connection
+// instead of the SFU's own UDP port. Returns nil when the user isn't on the
+// transport (then the SFU dials its own port, the legacy path). Satisfied by the
+// api.Server (which owns the rtc.Tunnel); wired in by main.
+type PCProvider interface {
+	VoicePC(userID int64) *webrtc.PeerConnection
+}
+
 // Config tunes the SFU's network surface.
 type Config struct {
 	UDPPort  int    // single UDP port the SFU listens on (operator forwards this one port)
@@ -39,13 +48,19 @@ type Config struct {
 
 // Manager owns every voice room on this Keep.
 type Manager struct {
-	api *webrtc.API
-	sig Signaler
+	api  *webrtc.API
+	sig  Signaler
+	pcOf PCProvider // optional: borrow the transport's PC for shared-connection voice
 
 	mu    sync.Mutex
-	rooms map[int64]*room  // channelID -> room
-	where map[int64]int64  // userID    -> channelID they're currently in
+	rooms map[int64]*room // channelID -> room
+	where map[int64]int64 // userID    -> channelID they're currently in
 }
+
+// SetPCProvider enables shared-connection voice: when a client joins with
+// on_transport set and the provider has a PC for them, the SFU forwards over
+// that existing peer connection instead of dialing its own UDP port.
+func (m *Manager) SetPCProvider(p PCProvider) { m.pcOf = p }
 
 type room struct {
 	channelID int64
@@ -55,15 +70,16 @@ type room struct {
 type participant struct {
 	userID   int64
 	pc       *webrtc.PeerConnection
+	borrowed bool                        // pc is the transport's (shared) — never Close() it
 	track    *webrtc.TrackLocalStaticRTP // forwarded copy of their mic; nil until OnTrack fires
 	muted    bool
 	deafened bool
 
 	// negotiation bookkeeping (server is the only offerer post-join)
-	pendingOffer bool                         // a server offer is awaiting the client's answer
-	needResync   bool                         // track set changed while an offer was outstanding
-	remoteReady  bool                         // remote description is set; safe to add ICE
-	iceQueue     []webrtc.ICECandidateInit    // candidates that arrived before remoteReady
+	pendingOffer bool                      // a server offer is awaiting the client's answer
+	needResync   bool                      // track set changed while an offer was outstanding
+	remoteReady  bool                      // remote description is set; safe to add ICE
+	iceQueue     []webrtc.ICECandidateInit // candidates that arrived before remoteReady
 }
 
 // NewManager builds the SFU. It binds one UDP socket that all peer connections
@@ -118,11 +134,12 @@ func (m *Manager) HandleVoice(userID int64, t string, d []byte) {
 	switch t {
 	case "VOICE_JOIN":
 		var p struct {
-			ChannelID int64                     `json:"channel_id"`
-			SDP       webrtc.SessionDescription `json:"sdp"`
+			ChannelID   int64                     `json:"channel_id"`
+			SDP         webrtc.SessionDescription `json:"sdp"`
+			OnTransport bool                      `json:"on_transport"`
 		}
 		if jsonUnmarshal(d, &p) == nil {
-			m.join(userID, p.ChannelID, p.SDP)
+			m.join(userID, p.ChannelID, p.SDP, p.OnTransport)
 		}
 	case "VOICE_ANSWER":
 		var p struct {
@@ -156,7 +173,7 @@ func (m *Manager) Disconnect(userID int64) { m.remove(userID) }
 
 // ── join / renegotiation ─────────────────────────────────────────────────────
 
-func (m *Manager) join(userID, channelID int64, offer webrtc.SessionDescription) {
+func (m *Manager) join(userID, channelID int64, offer webrtc.SessionDescription, onTransport bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -165,12 +182,24 @@ func (m *Manager) join(userID, channelID int64, offer webrtc.SessionDescription)
 		m.removeLocked(userID, prev)
 	}
 
-	pc, err := m.api.NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		return
+	// Shared-connection voice: borrow the transport's already-connected PC so the
+	// mic rides the same hole-punched link (no separate SFU port). Adding the
+	// audio is a renegotiation that reuses the existing ICE/DTLS — no new ICE.
+	var pc *webrtc.PeerConnection
+	borrowed := false
+	if onTransport && m.pcOf != nil {
+		if bp := m.pcOf.VoicePC(userID); bp != nil {
+			pc, borrowed = bp, true
+		}
+	}
+	if pc == nil {
+		var err error
+		if pc, err = m.api.NewPeerConnection(webrtc.Configuration{}); err != nil {
+			return
+		}
 	}
 
-	p := &participant{userID: userID, pc: pc}
+	p := &participant{userID: userID, pc: pc, borrowed: borrowed}
 	r := m.rooms[channelID]
 	if r == nil {
 		r = &room{channelID: channelID, parts: make(map[int64]*participant)}
@@ -178,20 +207,26 @@ func (m *Manager) join(userID, channelID int64, offer webrtc.SessionDescription)
 	}
 	r.parts[userID] = p
 	m.where[userID] = channelID
-	log.Printf("voice: user %d joining channel %d", userID, channelID)
+	log.Printf("voice: user %d joining channel %d (transport=%v)", userID, channelID, borrowed)
 
-	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
-		if c == nil {
-			return
-		}
-		m.sig.SendToUser(userID, "VOICE_ICE", map[string]any{"candidate": c.ToJSON()})
-	})
-	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-		log.Printf("voice: user %d connection state: %s", userID, s)
-		if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateClosed {
-			m.remove(userID)
-		}
-	})
+	// A borrowed PC is owned by the transport: its ICE is already up (no new
+	// candidates to trickle) and its connection-state/teardown is the transport's
+	// job — setting those handlers here would CLOBBER the transport's own ones.
+	// So a borrowed PC gets only OnTrack.
+	if !borrowed {
+		pc.OnICECandidate(func(c *webrtc.ICECandidate) {
+			if c == nil {
+				return
+			}
+			m.sig.SendToUser(userID, "VOICE_ICE", map[string]any{"candidate": c.ToJSON()})
+		})
+		pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
+			log.Printf("voice: user %d connection state: %s", userID, s)
+			if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateClosed {
+				m.remove(userID)
+			}
+		})
+	}
 	pc.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		m.onTrack(channelID, userID, remote)
 	})
@@ -396,7 +431,15 @@ func (m *Manager) removeLocked(userID, channelID int64) {
 		return
 	}
 	if p := r.parts[userID]; p != nil && p.pc != nil {
-		_ = p.pc.Close() // closing tears down senders; remote.Read in onTrack unblocks
+		if p.borrowed {
+			// Shared transport PC: NEVER Close() it — that would kill the data
+			// channel too. Leftover senders are harmless and get reconciled by
+			// signalLocked on the user's next join; the client tears down its own
+			// audio. We deliberately don't renegotiate here (it would glare with the
+			// client's own teardown).
+		} else {
+			_ = p.pc.Close() // closing tears down senders; remote.Read in onTrack unblocks
+		}
 	}
 	delete(r.parts, userID)
 	delete(m.where, userID)
@@ -409,6 +452,39 @@ func (m *Manager) removeLocked(userID, channelID int64) {
 }
 
 // ── state broadcast ──────────────────────────────────────────────────────────
+
+// Participant / ChannelState mirror the VOICE_STATE_UPDATE payload shape, so a
+// Snapshot can seed a freshly-connected client with current occupancy.
+type Participant struct {
+	UserID   int64 `json:"user_id"`
+	Muted    bool  `json:"muted"`
+	Deafened bool  `json:"deafened"`
+}
+type ChannelState struct {
+	ChannelID    int64         `json:"channel_id"`
+	Participants []Participant `json:"participants"`
+}
+
+// Snapshot returns current voice occupancy for every non-empty channel. The
+// world endpoint includes it so users see who is in a voice channel BEFORE
+// joining — live VOICE_STATE_UPDATE broadcasts only fire on join/leave, which a
+// just-connected client would otherwise miss.
+func (m *Manager) Snapshot() []ChannelState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []ChannelState{}
+	for cid, r := range m.rooms {
+		if r == nil || len(r.parts) == 0 {
+			continue
+		}
+		cs := ChannelState{ChannelID: cid, Participants: []Participant{}}
+		for _, p := range r.parts {
+			cs.Participants = append(cs.Participants, Participant{UserID: p.userID, Muted: p.muted, Deafened: p.deafened})
+		}
+		out = append(out, cs)
+	}
+	return out
+}
 
 // broadcastStateLocked tells EVERY gateway client who is in this voice channel,
 // so the channel list can show occupants even to users who haven't joined.

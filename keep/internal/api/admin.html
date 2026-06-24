@@ -34,6 +34,7 @@
   details.upnp-warn summary::-webkit-details-marker { color:var(--ember); }
   details.upnp-warn[open] summary { border-bottom:1px solid rgba(255,107,129,.2); }
   .upnp-warn-body { padding:10px 12px 11px; font-size:12px; color:var(--ember); line-height:1.55; }
+  .turn-warn { margin-top:10px; border:1px solid rgba(232,201,122,.4); background:rgba(232,201,122,.09); border-radius:10px; padding:10px 12px; font-size:12px; color:var(--gold); line-height:1.55; }
   .modal-overlay { position:fixed; inset:0; background:rgba(4,5,8,.72); backdrop-filter:blur(3px); z-index:200; display:flex; align-items:center; justify-content:center; padding:24px; }
   .modal { width:100%; max-width:560px; max-height:84vh; display:flex; flex-direction:column; background:var(--void-1); border:1px solid var(--edge); border-radius:14px; padding:18px; }
   .modal h3 { font-size:15px; color:var(--hi); font-weight:600; }
@@ -218,6 +219,15 @@
       Takes effect on restart — and if the cert can't load, the Keep stays on plain
       http so you're never locked out of this console.
     </div>
+    <div class="note" style="margin-top:6px">
+      <strong>Easiest path:</strong> put the Keep behind a reverse proxy or a
+      <span class="mono">cloudflared</span> tunnel that terminates TLS for you (a real,
+      browser-trusted certificate, zero files here) and share the
+      <span class="mono">https://</span> address. Or get a free cert with
+      <span class="mono">certbot</span> and point to it below. Self-signed certs are not
+      recommended — clients reject them. (The peer-to-peer transport is already encrypted
+      without any of this.)
+    </div>
     <label style="margin-top:12px;display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--hi);cursor:pointer">
       <input type="checkbox" id="tlsEnabled"> Enable TLS
     </label>
@@ -232,6 +242,37 @@
       <span class="note" style="align-self:center;margin-top:0">takes effect on restart</span>
     </div>
     <div class="err" id="tlsErr"></div>
+  </div>
+
+  <div class="card">
+    <div style="font-size:13.5px;font-weight:500;color:var(--hi)">P2P reachability (STUN / TURN)</div>
+    <div class="note" style="margin-top:2px">
+      For the experimental peer-to-peer transport. On a LAN nothing is needed. To host
+      across the internet, point at your OWN STUN/TURN servers (one URL per line, e.g.
+      <span class="mono">stun:stun.example.com:3478</span> or
+      <span class="mono">turn:turn.example.com:3478</span>). TURN credentials below apply
+      to <span class="mono">turn:</span> URLs. Applies on the next connect.
+    </div>
+    <textarea id="iceUrls" class="mono" rows="3" placeholder="stun:stun.example.com:3478&#10;turn:turn.example.com:3478" style="width:100%;margin-top:10px;box-sizing:border-box;background:var(--void-3);color:var(--hi);border:1px solid var(--edge);border-radius:8px;padding:8px"></textarea>
+    <div class="bar" style="margin-top:6px">
+      <input id="iceUser" class="mono" placeholder="TURN username (optional)" style="flex:1;min-width:0">
+      <input id="iceCred" class="mono" placeholder="TURN credential (optional)" style="flex:1;min-width:0">
+    </div>
+    <div class="turn-warn">
+      <strong>Notice!</strong><br>
+      Forcing TURN relay routes all file and voice data through the specified server. Ensure your
+      TURN provider allows heavy bandwidth usage before enabling.
+    </div>
+    <label style="margin-top:10px;display:flex;align-items:start;gap:8px;font-size:13px;color:var(--hi);cursor:pointer">
+      <input type="checkbox" id="forceRelay" style="margin-top:2px">
+      <span>Force relay (TURN only) — members connect only through your TURN server, so they
+        see the relay's IP and never your Keep's home IP. Requires a working TURN server.</span>
+    </label>
+    <div class="bar" style="margin-top:10px">
+      <button onclick="saveICE()">Save reachability</button>
+      <span class="note" style="align-self:center;margin-top:0">applies on next connect</span>
+    </div>
+    <div class="err" id="iceErr"></div>
   </div>
 </div>
 
@@ -296,6 +337,10 @@ function renderState(st) {
   if (document.activeElement !== $('tlsCert')) $('tlsCert').value = st.tls_cert_path || ''
   if (document.activeElement !== $('tlsKey')) $('tlsKey').value = st.tls_key_path || ''
   if (document.activeElement !== $('uploadInput')) $('uploadInput').value = st.max_upload_mb || 100
+  if (document.activeElement !== $('iceUrls')) $('iceUrls').value = (st.ice_urls || []).join('\n')
+  if (document.activeElement !== $('iceUser')) $('iceUser').value = st.ice_username || ''
+  if (document.activeElement !== $('iceCred')) $('iceCred').value = st.ice_credential || ''
+  $('forceRelay').checked = !!st.force_relay
   const u = st.upnp || {}
   $('upnpRow').classList.toggle('hidden', !u.available)
   if (u.available) {
@@ -324,6 +369,7 @@ function renderState(st) {
         ${['member','admin','owner'].map(r =>
           `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r}</option>`).join('')}
       </select>
+      <button onclick="revokeSessions(${u.id}, '${esc(u.username)}')" title="Log out everywhere and invalidate current tokens — they keep their account and can rejoin.">revoke</button>
       <button class="danger" onclick="removeUser(${u.id}, '${esc(u.username)}')">remove</button>
     </div>`).join('') || '<div class="row faint">No users yet — this keep is unclaimed.</div>'
 }
@@ -363,6 +409,14 @@ async function removeUser(id, name) {
   try {
     await api(`/v1/host/users/${id}`, { method: 'DELETE' })
     $('userErr').textContent = ''
+    refresh()
+  } catch (e) { $('userErr').textContent = e.message }
+}
+async function revokeSessions(id, name) {
+  if (!confirm(`Revoke ${name}'s sessions? They're logged out everywhere and their current tokens stop working immediately. They keep their account and can rejoin by re-handshaking.`)) return
+  try {
+    const r = await api(`/v1/host/users/${id}/revoke`, { method: 'POST' })
+    $('userErr').textContent = `Revoked ${r.revoked} session(s), dropped ${r.disconnected} live connection(s).`
     refresh()
   } catch (e) { $('userErr').textContent = e.message }
 }
@@ -438,6 +492,22 @@ async function saveTLS() {
     $('tlsErr').style.color = 'var(--pulse)'
     $('tlsErr').textContent = 'Saved — restart the Keep to apply.'
   } catch (e) { $('tlsErr').style.color = 'var(--ember)'; $('tlsErr').textContent = e.message }
+}
+
+async function saveICE() {
+  const urls = $('iceUrls').value.split('\n').map(s => s.trim()).filter(Boolean)
+  const user = $('iceUser').value.trim()
+  const cred = $('iceCred').value.trim()
+  // one server object carrying all URLs (+ creds, which only matter for turn: URLs)
+  const iceServers = urls.length ? [{ urls, username: user || undefined, credential: cred || undefined }] : []
+  try {
+    await api('/v1/host/ice', { method: 'POST', body: JSON.stringify({
+      ice_servers: iceServers,
+      force_relay: $('forceRelay').checked
+    }) })
+    $('iceErr').style.color = 'var(--pulse)'
+    $('iceErr').textContent = 'Saved — applies on the next connect.'
+  } catch (e) { $('iceErr').style.color = 'var(--ember)'; $('iceErr').textContent = e.message }
 }
 
 // poll discovery until the rebuilt server answers again, then reload

@@ -1,4 +1,4 @@
-import { getKeep } from '@/net/bind'
+import { useMedia } from '@/lib/useMedia'
 
 /** Renders a member's avatar: the uploaded image (GIFs animate) when set,
  *  else a gradient disc with their initial. Image URL comes from the Keep
@@ -18,7 +18,7 @@ export function KeepAvatar({
   size?: number
   ring?: boolean
 }): React.JSX.Element {
-  const url = avatar ? getKeep(instanceId)?.mediaUrl(avatar) : ''
+  const { src: url } = useMedia(instanceId, avatar)
   return (
     <div
       className={`shrink-0 overflow-hidden rounded-full ${ring ? 'ring-2 ring-void-1' : ''}`}

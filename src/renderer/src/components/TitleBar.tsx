@@ -1,9 +1,27 @@
-import { RefreshCw, Search } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Hammer, RefreshCw, Search } from 'lucide-react'
 import { useUi, useWorld } from '@/store'
 
 export function TitleBar(): React.JSX.Element {
   const { activeServerId, activeChannelId, openPalette, connections, update } = useUi()
   const { servers } = useWorld()
+
+  // Experimental sandbox only: a rebuild-from-source + relaunch shortcut, so a
+  // code change shows without stopping and re-running the launcher.
+  const [isDev, setIsDev] = useState(false)
+  const [building, setBuilding] = useState(false)
+  useEffect(() => {
+    void window.reliquary.isDev?.().then(setIsDev)
+  }, [])
+  const rebuild = async (): Promise<void> => {
+    setBuilding(true)
+    const r = await window.reliquary.rebuildRestart()
+    // on success the app relaunches and we never get here; on failure, reset
+    if (r?.error) {
+      console.error('rebuild failed:', r.error)
+      setBuilding(false)
+    }
+  }
   const server = servers.find((s) => s.id === activeServerId)
   const channel = server
     ? connections[server.instanceId]?.world?.channels.find((c) => String(c.id) === activeChannelId)
@@ -37,14 +55,28 @@ export function TitleBar(): React.JSX.Element {
         </div>
       )}
 
-      {/* auto-update: a quiet "downloading" hint; the actionable prompt is the
-          full-width UpdateBanner that appears once the download finishes */}
-      {update.status === 'download-progress' && (
-        <span className="ml-auto flex items-center gap-1.5 px-2.5 text-[11px] text-lo">
-          <RefreshCw size={11} className="animate-spin" />
-          Updating… {update.percent ?? 0}%
-        </span>
-      )}
+      {/* right-side controls — sit just left of the native caption buttons */}
+      <div className="no-drag ml-auto flex items-center gap-1.5 pr-2">
+        {/* auto-update: a quiet "downloading" hint; the actionable prompt is the
+            full-width UpdateBanner that appears once the download finishes */}
+        {update.status === 'download-progress' && (
+          <span className="flex items-center gap-1.5 px-1.5 text-[11px] text-lo">
+            <RefreshCw size={11} className="animate-spin" />
+            Updating… {update.percent ?? 0}%
+          </span>
+        )}
+        {isDev && (
+          <button
+            onClick={() => void rebuild()}
+            disabled={building}
+            title="Rebuild from source and restart this window (Experimental build only)"
+            className="flex items-center gap-1.5 rounded-md border border-edge px-2 py-[3px] text-[11px] text-mid transition-colors hover:border-relic/40 hover:text-hi disabled:opacity-50"
+          >
+            <Hammer size={12} className={building ? 'animate-pulse' : ''} />
+            {building ? 'Rebuilding…' : 'Rebuild'}
+          </button>
+        )}
+      </div>
 
       {/* search — becomes the ⌘K palette */}
       <div className="pointer-events-none absolute left-1/2 -translate-x-1/2">

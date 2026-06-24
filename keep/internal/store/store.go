@@ -8,6 +8,7 @@
 package store
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -15,9 +16,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
+
+	"reliquary.gg/keep/internal/atrest"
 
 	_ "modernc.org/sqlite"
 )
@@ -96,16 +100,16 @@ type ReplyPreview struct {
 }
 
 type Message struct {
-	ID          int64         `json:"id"`
-	ChannelID   int64         `json:"channel_id"`
-	Author      User          `json:"author"`
-	Content     string        `json:"content"`
-	Attachments []Attachment  `json:"attachments"`
-	ReplyTo     int64         `json:"reply_to"`               // referenced message id, 0 = not a reply
+	ID           int64         `json:"id"`
+	ChannelID    int64         `json:"channel_id"`
+	Author       User          `json:"author"`
+	Content      string        `json:"content"`
+	Attachments  []Attachment  `json:"attachments"`
+	ReplyTo      int64         `json:"reply_to"`                // referenced message id, 0 = not a reply
 	ReplyPreview *ReplyPreview `json:"reply_preview,omitempty"` // resolved snapshot, nil if original gone
-	Pinned      bool          `json:"pinned"`
-	CreatedAt   int64         `json:"created_at"` // unix ms
-	EditedAt    int64         `json:"edited_at"`  // unix ms, 0 = never edited
+	Pinned       bool          `json:"pinned"`
+	CreatedAt    int64         `json:"created_at"` // unix ms
+	EditedAt     int64         `json:"edited_at"`  // unix ms, 0 = never edited
 }
 
 type Invite struct {
@@ -133,6 +137,30 @@ type Event struct {
 type Store struct {
 	db       *sql.DB
 	mediaDir string
+	cipher   *atrest.Cipher // nil = encryption-at-rest off
+}
+
+// SetCipher turns on encryption at rest. New content/media writes are encrypted;
+// reads decrypt self-describing blobs and pass plaintext through, so it's safe to
+// enable on a Keep with existing (plaintext) data — a migration encrypts the rest.
+func (s *Store) SetCipher(c *atrest.Cipher) { s.cipher = c }
+
+// EncryptionOn reports whether encryption at rest is active.
+func (s *Store) EncryptionOn() bool { return s.cipher != nil }
+
+// enc/dec apply the at-rest cipher to a TEXT value when encryption is on; both are
+// no-ops (and dec passes plaintext through) otherwise, so call sites stay simple.
+func (s *Store) enc(v string) string {
+	if s.cipher != nil {
+		return s.cipher.EncryptText(v)
+	}
+	return v
+}
+func (s *Store) dec(v string) string {
+	if s.cipher != nil {
+		return s.cipher.DecryptText(v)
+	}
+	return v
 }
 
 func Open(path string) (*Store, error) {
@@ -341,9 +369,14 @@ func nowMS() int64 { return time.Now().UnixMilli() }
 // empty for these disk-backed entries; they're served from the file.
 func (s *Store) PutMedia(hash, contentType string, data []byte) error {
 	dst := filepath.Join(s.mediaDir, hash)
+	size := len(data) // store the PLAINTEXT size (what the client sees); the file may be encrypted
 	if _, statErr := os.Stat(dst); statErr != nil {
+		toWrite := data
+		if s.cipher != nil {
+			toWrite = s.cipher.EncryptFile(data) // at-rest: ciphertext on disk; hash stays the plaintext hash
+		}
 		tmp := dst + ".tmp"
-		if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		if err := os.WriteFile(tmp, toWrite, 0o644); err != nil {
 			return err
 		}
 		if err := os.Rename(tmp, dst); err != nil {
@@ -354,9 +387,41 @@ func (s *Store) PutMedia(hash, contentType string, data []byte) error {
 	_, err := s.db.Exec(
 		`INSERT INTO media (hash, content_type, size, bytes, created_at)
 		 VALUES (?, ?, ?, ?, ?) ON CONFLICT(hash) DO NOTHING`,
-		hash, contentType, len(data), []byte{}, nowMS(),
+		hash, contentType, size, []byte{}, nowMS(),
 	)
 	return err
+}
+
+// OpenMediaContent returns a seekable reader of the media's PLAINTEXT bytes for
+// serving — decrypting on the fly if stored encrypted — plus its modtime and a
+// close func. Unencrypted disk media streams straight from the file (Range
+// support); encrypted media is decrypted into memory first.
+func (s *Store) OpenMediaContent(hash string) (io.ReadSeeker, time.Time, func(), error) {
+	path := filepath.Join(s.mediaDir, hash)
+	if info, statErr := os.Stat(path); statErr == nil {
+		if s.cipher == nil {
+			if f, err := os.Open(path); err == nil {
+				return f, info.ModTime(), func() { f.Close() }, nil
+			}
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, time.Time{}, nil, err
+		}
+		plain := raw
+		if s.cipher != nil {
+			if p, derr := s.cipher.DecryptFile(raw); derr == nil {
+				plain = p // self-describing: legacy plaintext passes through unchanged
+			}
+		}
+		return bytes.NewReader(plain), info.ModTime(), func() {}, nil
+	}
+	// legacy blob (pre-disk storage) — stored plaintext
+	_, data, err := s.GetMedia(hash)
+	if err != nil {
+		return nil, time.Time{}, nil, err
+	}
+	return bytes.NewReader(data), time.Time{}, func() {}, nil
 }
 
 func (s *Store) MediaExists(hash string) (bool, error) {
@@ -513,6 +578,18 @@ func (s *Store) CreateSession(profileID int64) (string, error) {
 	return token, err
 }
 
+// RevokeSessions deletes every session for a profile, returning how many were
+// removed. The user's current tokens become invalid immediately (UserByToken
+// fails); they must re-handshake (re-prove key ownership) to get a new one.
+func (s *Store) RevokeSessions(profileID int64) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM sessions WHERE profile_id = ?`, profileID)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 func (s *Store) UserByToken(token string) (User, error) {
 	u, err := scanUser(s.db.QueryRow(
 		`SELECT u.id, u.pubkey, u.fingerprint, u.username, u.accent, u.role,
@@ -621,7 +698,7 @@ func (s *Store) CreateMessage(channelID, authorID int64, content string, attachm
 	created := nowMS()
 	res, err := s.db.Exec(
 		`INSERT INTO messages (channel_id, author_id, content, attachments, reply_to, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		channelID, authorID, content, string(attachJSON), replyTo, created,
+		channelID, authorID, s.enc(content), s.enc(string(attachJSON)), replyTo, created,
 	)
 	if err != nil {
 		return Message{}, err
@@ -641,7 +718,7 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanMessage(sc rowScanner) (Message, error) {
+func (s *Store) scanMessage(sc rowScanner) (Message, error) {
 	var m Message
 	var attachJSON string
 	var pinned int
@@ -653,6 +730,8 @@ func scanMessage(sc rowScanner) (Message, error) {
 		return Message{}, err
 	}
 	m.Pinned = pinned != 0
+	m.Content = s.dec(m.Content)
+	attachJSON = s.dec(attachJSON)
 	if attachJSON != "" {
 		_ = json.Unmarshal([]byte(attachJSON), &m.Attachments)
 	}
@@ -677,6 +756,8 @@ func (s *Store) resolveReply(m *Message) {
 	if err != nil {
 		return
 	}
+	p.Content = s.dec(p.Content)
+	attachJSON = s.dec(attachJSON)
 	if r := []rune(p.Content); len(r) > 120 {
 		p.Content = string(r[:120]) + "…"
 	}
@@ -687,7 +768,7 @@ func (s *Store) resolveReply(m *Message) {
 // MessageByID fetches one message (used to authorize edit/delete and to return
 // the post-edit state). Returns ErrNotFound if it doesn't exist.
 func (s *Store) MessageByID(id int64) (Message, error) {
-	m, err := scanMessage(s.db.QueryRow(
+	m, err := s.scanMessage(s.db.QueryRow(
 		`SELECT `+msgCols+` FROM messages m JOIN profiles u ON u.id = m.author_id WHERE m.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Message{}, ErrNotFound
@@ -726,7 +807,7 @@ func (s *Store) PinnedMessages(channelID int64) ([]Message, error) {
 	defer rows.Close()
 	out := []Message{}
 	for rows.Next() {
-		m, err := scanMessage(rows)
+		m, err := s.scanMessage(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -746,7 +827,7 @@ func (s *Store) PinnedMessages(channelID int64) ([]Message, error) {
 func (s *Store) UpdateMessage(id, authorID int64, content string) (Message, error) {
 	res, err := s.db.Exec(
 		`UPDATE messages SET content = ?, edited_at = ? WHERE id = ? AND author_id = ?`,
-		content, nowMS(), id, authorID)
+		s.enc(content), nowMS(), id, authorID)
 	if err != nil {
 		return Message{}, err
 	}
@@ -792,7 +873,7 @@ func (s *Store) Messages(channelID int64, limit int, before int64) ([]Message, e
 	defer rows.Close()
 	var out []Message
 	for rows.Next() {
-		m, err := scanMessage(rows)
+		m, err := s.scanMessage(rows)
 		if err != nil {
 			return nil, err
 		}

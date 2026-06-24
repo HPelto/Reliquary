@@ -2,6 +2,7 @@
 package api
 
 import (
+	"crypto/ed25519"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -55,16 +56,24 @@ type Config struct {
 }
 
 type Server struct {
-	st         *store.Store
-	hub        *gateway.Hub
-	cfg        Config
-	mux        *chi.Mux
-	challenges *challenges
-	restartFn  func() // set by main only when supervised; nil otherwise
-	updateFn   func() // pull-latest-then-rebuild restart; source mode only
-	selfUpdate func() // portable: download+swap latest release, then restart
-	netMap     *netmap.Manager // automatic UPnP port forwarding; nil if unavailable
-	rtc        *rtc.Tunnel     // serves the API over a WebRTC data channel (P2P transport)
+	st            *store.Store
+	hub           *gateway.Hub
+	cfg           Config
+	mux           *chi.Mux
+	challenges    *challenges
+	restartFn     func()          // set by main only when supervised; nil otherwise
+	updateFn      func()          // pull-latest-then-rebuild restart; source mode only
+	selfUpdate    func()          // portable: download+swap latest release, then restart
+	netMap        *netmap.Manager // automatic UPnP port forwarding; nil if unavailable
+	rtc           *rtc.Tunnel     // serves the API over a WebRTC data channel (P2P transport)
+	voiceSnapshot func() any      // current voice occupancy for the world payload; nil if no voice
+
+	// The Keep's own Ed25519 identity — the trust anchor for the P2P transport.
+	// Generated on first boot, persisted in settings. Its public half is published
+	// in discovery + embedded in invites, so a joining client can verify the
+	// signed DTLS fingerprint and detect a man-in-the-middle (no CA needed).
+	keepPriv ed25519.PrivateKey
+	keepPub  ed25519.PublicKey
 
 	// cached self-update status, refreshed by main's background checker
 	updMu      sync.Mutex
@@ -90,6 +99,21 @@ func (s *Server) SetSelfUpdate(fn func()) { s.selfUpdate = fn }
 // SetNetMap wires the automatic UPnP port-forwarder so the host console can show
 // its status and toggle it. When nil, the console hides the auto-forward control.
 func (s *Server) SetNetMap(m *netmap.Manager) { s.netMap = m }
+
+// SetVoiceSnapshot wires a provider of current voice occupancy (the voice
+// Manager) so /v1/world can seed clients with who's in each voice channel. Kept
+// as a func to avoid an api→voice import.
+func (s *Server) SetVoiceSnapshot(fn func() any) { s.voiceSnapshot = fn }
+
+// VoicePC returns a P2P-connected user's transport peer connection (or nil),
+// letting the voice SFU borrow it for shared-connection voice. Satisfies
+// voice.PCProvider structurally; wired by main.
+func (s *Server) VoicePC(userID int64) *webrtc.PeerConnection {
+	if s.rtc == nil {
+		return nil
+	}
+	return s.rtc.VoicePC(userID)
+}
 
 // SetUpdateStatus caches the latest known version so the host console can
 // passively surface "update available" between manual checks. Called by main's
@@ -126,11 +150,24 @@ func (s *Server) applyUpdate() func() {
 func New(st *store.Store, hub *gateway.Hub, cfg Config) *Server {
 	s := &Server{st: st, hub: hub, cfg: cfg, challenges: newChallenges()}
 
+	// Load (or first-boot generate) the Keep's identity keypair before anything
+	// can serve, so discovery + RTC signaling always have it.
+	s.ensureKeepIdentity()
+
 	// The P2P transport serves the whole API over a WebRTC data channel by
 	// replaying each framed request through s itself — the full router + auth
-	// stack, reused verbatim. A public STUN server lets it gather a reflexive
-	// candidate for real hole-punching.
-	s.rtc = rtc.New(s, []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}})
+	// stack, reused verbatim. No STUN/TURN for now: on LAN/loopback host
+	// candidates suffice and gather instantly, whereas an unreachable STUN server
+	// would stall Answer()'s gathering for seconds on every connect. Cross-NAT
+	// reachability (owner-provided STUN/TURN) returns in the reachability track.
+	s.rtc = rtc.New(s, nil)
+	// Carry the realtime gateway over the same data channel: a P2P-connected
+	// client subscribes and receives the identical hub event stream a WebSocket
+	// client gets. s itself satisfies rtc.Gateway (token auth + hub bridge).
+	s.rtc.SetGateway(s)
+	// The answerer PC gathers candidates from the owner-configured STUN/TURN set
+	// (read fresh each connect, so host-console changes apply without a restart).
+	s.rtc.SetICEServers(s.tunnelICEServers)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP, middleware.Recoverer, cors)
@@ -159,7 +196,8 @@ func New(st *store.Store, hub *gateway.Hub, cfg Config) *Server {
 			r.Post("/auth/challenge", s.handleChallenge)
 			r.Post("/auth/handshake", s.handleHandshake)
 			r.Get("/invites/{token}", s.handleInvitePreview)
-				r.Post("/rtc/connect", s.handleRTCConnect) // WebRTC signaling (P2P transport)
+			r.Post("/rtc/connect", s.handleRTCConnect) // WebRTC signaling (P2P transport)
+			r.Get("/rtc/ice", s.handleRTCICE)          // ICE config, fetched before the connect
 
 			r.Group(func(r chi.Router) {
 				r.Use(s.requireAuth)
@@ -201,6 +239,7 @@ func New(st *store.Store, hub *gateway.Hub, cfg Config) *Server {
 				r.Post("/keep-password", s.handleHostKeepPassword)
 				r.Patch("/users/{id}", s.handleHostSetRole)
 				r.Delete("/users/{id}", s.handleHostDeleteUser)
+				r.Post("/users/{id}/revoke", s.handleHostRevokeSessions)
 				r.Post("/addr", s.handleHostAddr)
 				r.Post("/voice-port", s.handleHostVoicePort)
 				r.Post("/tls", s.handleHostTLS)
@@ -211,6 +250,7 @@ func New(st *store.Store, hub *gateway.Hub, cfg Config) *Server {
 				r.Get("/check-updates", s.handleHostCheckUpdates)
 				r.Get("/update-license", s.handleHostUpdateLicense)
 				r.Post("/upnp", s.handleHostUPnP)
+				r.Post("/ice", s.handleHostICE)
 			})
 		})
 	})
@@ -243,7 +283,63 @@ func (s *Server) handleRTCConnect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "rtc setup failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, answer)
+	// Attest the channel: sign the answer's DTLS fingerprint with the Keep's
+	// identity key. A client that knows our pubkey (from the invite) verifies the
+	// signature, binding the encrypted session to our identity — a MITM that
+	// substitutes its own DTLS cert can't forge this signature. No CA involved.
+	resp := map[string]any{"answer": answer}
+	if fp := dtlsFingerprint(answer.SDP); fp != "" {
+		if sig := s.signFingerprint(fp); sig != "" {
+			resp["keep_key"] = s.KeepPubB64()
+			resp["fingerprint_sig"] = sig
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// dtlsFingerprint pulls the first DTLS fingerprint out of an SDP (the
+// `a=fingerprint:<hash> <hex:hex:…>` line). Both ends parse the same answer SDP,
+// so they agree on exactly what was signed.
+func dtlsFingerprint(sdp string) string {
+	const prefix = "a=fingerprint:"
+	for _, line := range strings.Split(sdp, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	return ""
+}
+
+// Subscribe implements rtc.Gateway: it authenticates a bearer token and, on
+// success, bridges the hub's event stream onto the RTC data channel by calling
+// push for each event. It mirrors the WebSocket gateway — including the opening
+// HELLO — so a P2P-connected client sees the exact same realtime stream and
+// counts toward presence identically. The returned stop tears the subscription
+// down (idempotent); ok is false for an invalid token.
+func (s *Server) Subscribe(token string, push func(t string, d any) bool) (int64, func(), bool) {
+	user, err := s.st.UserByToken(token)
+	if err != nil {
+		return 0, nil, false
+	}
+	stream, unsub := s.hub.Subscribe(user.ID)
+	push("HELLO", map[string]any{"user": user}) // parity with the WS gateway's hello
+	go func() {
+		for ev := range stream {
+			if !push(ev.T, ev.D) {
+				unsub() // peer gone; unsub closes the stream, ending this loop
+				return
+			}
+		}
+	}()
+	return user.ID, unsub, true
+}
+
+// HandleInbound implements rtc.Gateway: route a client→server gateway frame from
+// a P2P-connected user (presence change, voice signaling) into the hub, exactly
+// as the WebSocket read loop does for a socket client.
+func (s *Server) HandleInbound(userID int64, t string, d json.RawMessage) {
+	s.hub.RouteInbound(userID, t, d)
 }
 
 // ── helpers ─────────────────────────────────────────────────────────
@@ -287,6 +383,7 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"version":  ServerVersion,
 		"api":      "/v1",
 		"gateway":  "/v1/gateway",
+		"keep_key": s.KeepPubB64(), // identity pubkey — trust anchor for the P2P transport
 	})
 }
 
@@ -325,7 +422,7 @@ func (s *Server) handleWorld(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	world := map[string]any{
 		"name":            s.instanceName(),
 		"version":         ServerVersion,
 		"protocol":        ProtocolVersion,
@@ -335,7 +432,13 @@ func (s *Server) handleWorld(w http.ResponseWriter, r *http.Request) {
 		"lock_name_style": s.nameStyleLocked(),
 		"require_invite":  s.inviteRequired(),
 		"max_upload_mb":   int(s.maxUploadBytes() >> 20),
-	})
+	}
+	// current voice occupancy, so a just-connected client sees who's in a voice
+	// channel before joining (live VOICE_STATE_UPDATE only fires on join/leave).
+	if s.voiceSnapshot != nil {
+		world["voice_states"] = s.voiceSnapshot()
+	}
+	writeJSON(w, http.StatusOK, world)
 }
 
 // ── messages ────────────────────────────────────────────────────────

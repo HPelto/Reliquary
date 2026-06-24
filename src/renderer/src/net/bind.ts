@@ -6,6 +6,7 @@
 
 import { KeepConnection, type KeepMessage, type KeepUser } from './keep'
 import { routeVoiceFrame } from './voice'
+import { isP2PEnabled } from '@/lib/experiments'
 import { resolved } from '@/lib/notifications'
 import { playChatNotification } from '@/lib/sound'
 import { updateWorld } from '@/lib/worlds'
@@ -63,16 +64,34 @@ function upsertMember(instanceId: string, user: KeepUser, online?: boolean): voi
 export function createKeep(
   instanceId: string,
   serverId: string,
-  target: { host: string; port: number; secure?: boolean }
+  target: { host: string; port: number; secure?: boolean; keepKey?: string }
 ): KeepConnection {
   dropKeep(instanceId)
 
-  const conn: KeepConnection = new KeepConnection(target, {
+  // The P2P transport is an opt-in experiment, chosen per connection at create
+  // time so flipping the toggle takes effect on the next (re)join.
+  const withTransport = { ...target, transport: isP2PEnabled() ? ('rtc' as const) : ('http' as const) }
+
+  const conn: KeepConnection = new KeepConnection(withTransport, {
     onStatus: (status) => useUi.getState().setKeep(instanceId, { status }),
     onWorld: (world) => {
       useUi.getState().setKeep(instanceId, { world, ping: conn.ping })
       useUi.getState().renameServer(serverId, world.name)
-      updateWorld(instanceId, { name: world.name })
+      // seed voice occupancy from the snapshot so occupants show before joining
+      // (live VOICE_STATE_UPDATE only fires on join/leave)
+      for (const vs of world.voice_states ?? []) {
+        useUi.getState().applyVoiceState(
+          instanceId,
+          vs.channel_id,
+          vs.participants.map((p) => ({ userId: p.user_id, muted: p.muted, deafened: p.deafened }))
+        )
+      }
+      // pin the Keep's identity key on first connect (TOFU), so later P2P
+      // connects to this world can detect a man-in-the-middle
+      updateWorld(instanceId, {
+        name: world.name,
+        ...(conn.keepKey ? { keepKey: conn.keepKey } : {})
+      })
     },
     onMessage: (msg) => {
       useUi.getState().appendKeepMessage(instanceId, msg)
