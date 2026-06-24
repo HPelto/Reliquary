@@ -90,6 +90,10 @@
   .hidden { display:none !important; }
   .spacer { flex:1; }
   select.role { padding:5px 8px; font-size:12px; border-radius:8px; }
+  .tabs { display:flex; gap:2px; margin:20px 0 4px; border-bottom:1px solid var(--edge); }
+  .tab { background:transparent; color:var(--mid); border:0; border-bottom:2px solid transparent; border-radius:0; padding:9px 15px; font:inherit; font-weight:500; cursor:pointer; }
+  .tab:hover { color:var(--hi); box-shadow:none; background:transparent; }
+  .tab.active { color:var(--hi); border-bottom-color:var(--relic); }
 </style>
 </head>
 <body>
@@ -123,6 +127,13 @@
     <button class="ghost" onclick="logout()">Lock</button>
   </div>
 
+  <nav class="tabs">
+    <button class="tab active" data-page="overview" onclick="showPage('overview')">Overview</button>
+    <button class="tab" data-page="users" onclick="showPage('users')">Users</button>
+    <button class="tab" data-page="network" onclick="showPage('network')">Network</button>
+  </nav>
+
+  <div class="page" id="page-overview">
   <h2>Overview</h2>
   <div class="card stats">
     <div class="stat"><b id="statUsers">–</b><span>users</span></div>
@@ -147,6 +158,30 @@
     <div class="err" id="pwErr"></div>
   </div>
 
+  <h2>Storage &amp; maintenance</h2>
+  <div class="card">
+    <div class="bar" style="margin-top:0">
+      <span style="align-self:center;font-size:13px;color:var(--hi)">Max upload size</span>
+      <input id="uploadInput" class="mono" type="number" min="1" max="1024" placeholder="100" style="max-width:90px">
+      <span class="note" style="align-self:center;margin-top:0">MB — your storage, your call · applies immediately</span>
+      <button onclick="saveUploadLimit()">Save</button>
+      <span class="err" id="uploadErr" style="align-self:center;margin-top:0"></span>
+    </div>
+    <div id="restartRow" class="hidden" style="margin-top:14px;border-top:1px solid var(--edge);padding-top:14px;display:flex;align-items:center;gap:12px">
+      <div style="flex:1">
+        <div style="font-size:13.5px;font-weight:500;color:var(--hi)">Restart server</div>
+        <div class="note" style="margin-top:2px">Restart rebuilds local source. Update &amp; Restart pulls the latest version first, then rebuilds. Clients reconnect automatically (a few seconds of downtime).</div>
+        <div class="note" id="checkMsg" style="margin-top:6px"></div>
+      </div>
+      <button class="ghost" id="checkBtn" onclick="checkUpdates()">Check for updates</button>
+      <button class="ghost" id="updateBtn" onclick="updateServer()">Update &amp; Restart</button>
+      <button class="danger" id="restartBtn" onclick="restartServer()">Restart</button>
+    </div>
+    <div id="restartMsg" class="note" style="margin-top:8px"></div>
+  </div>
+  </div>
+
+  <div class="page hidden" id="page-users">
   <h2>Users</h2>
   <div class="card">
     <div id="userList"></div>
@@ -161,8 +196,10 @@
     </p>
     <div class="err" id="userErr"></div>
   </div>
+  </div>
 
-  <h2>Server config</h2>
+  <div class="page hidden" id="page-network">
+  <h2>Ports &amp; forwarding</h2>
   <div class="card">
     <div class="bar" style="margin-top:0">
       <input id="addrInput" class="mono" placeholder=":7777" style="max-width:140px">
@@ -191,24 +228,6 @@
       <div class="note" style="margin-top:6px">When on, opens your chat &amp; voice ports so friends can connect without router setup. Already forwarded by hand (or using a tunnel)? Leave this off.</div>
       <div class="note" id="upnpStatus" style="margin-top:6px"></div>
     </div>
-    <div class="bar" style="margin-top:12px;border-top:1px solid var(--edge);padding-top:12px">
-      <span style="align-self:center;font-size:13px;color:var(--hi)">Max upload size</span>
-      <input id="uploadInput" class="mono" type="number" min="1" max="1024" placeholder="100" style="max-width:90px">
-      <span class="note" style="align-self:center;margin-top:0">MB — your storage, your call · applies immediately</span>
-      <button onclick="saveUploadLimit()">Save</button>
-      <span class="err" id="uploadErr" style="align-self:center;margin-top:0"></span>
-    </div>
-    <div id="restartRow" class="hidden" style="margin-top:14px;border-top:1px solid var(--edge);padding-top:14px;display:flex;align-items:center;gap:12px">
-      <div style="flex:1">
-        <div style="font-size:13.5px;font-weight:500;color:var(--hi)">Restart server</div>
-        <div class="note" style="margin-top:2px">Restart rebuilds local source. Update &amp; Restart pulls the latest version first, then rebuilds. Clients reconnect automatically (a few seconds of downtime).</div>
-        <div class="note" id="checkMsg" style="margin-top:6px"></div>
-      </div>
-      <button class="ghost" id="checkBtn" onclick="checkUpdates()">Check for updates</button>
-      <button class="ghost" id="updateBtn" onclick="updateServer()">Update &amp; Restart</button>
-      <button class="danger" id="restartBtn" onclick="restartServer()">Restart</button>
-    </div>
-    <div id="restartMsg" class="note" style="margin-top:8px"></div>
   </div>
 
   <div class="card">
@@ -274,6 +293,7 @@
     </div>
     <div class="err" id="iceErr"></div>
   </div>
+  </div>
 </div>
 
 <div id="licenseModal" class="modal-overlay hidden">
@@ -321,6 +341,11 @@ function logout() {
 }
 
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])) }
+
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('hidden', p.id !== 'page-' + name))
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.page === name))
+}
 
 function renderState(st) {
   $('keepName').textContent = st.name
